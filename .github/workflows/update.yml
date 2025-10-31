@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade requests
 
       - name: Run fetch script
-        run: python fetch_vpngate.py
+        run: python fetch.py
 
       - name: Commit and push changes
         run: |
