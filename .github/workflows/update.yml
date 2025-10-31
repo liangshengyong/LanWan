@@ -1,4 +1,4 @@
-name: Update VPNGate Data
+name: Update Data
 
 on:
   schedule:
