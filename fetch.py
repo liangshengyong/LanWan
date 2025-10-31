@@ -2,40 +2,31 @@ import requests, json, os
 
 url = "https://www.vpngate.net/api/iphone/"
 data_path = "data/servers.json"
-size_path = "data/last_size.txt"
+size_path = "data/last_length.txt"
 
-# 获取上次文件大小
-old_size = None
+# 读取上次文件大小
+old_size = 0
 if os.path.exists(size_path):
-    with open(size_path, "r", encoding="utf-8") as f:
-        old_size = f.read().strip()
-        if old_size.isdigit():
-            old_size = int(old_size)
-        else:
-            old_size = None
+    try:
+        old_size = int(open(size_path, "r", encoding="utf-8").read().strip() or 0)
+    except:
+        old_size = 0
 
-# 请求 HEAD 获取当前大小
-try:
-    r_head = requests.head(url, timeout=10)
-    r_head.raise_for_status()
-    new_size = int(r_head.headers.get("Content-Length", 0))
-except Exception as e:
-    print("HEAD request failed:", e)
-    exit(1)
-
-# 对比大小
-if old_size == new_size:
-    print("File size unchanged, skipping download.")
-    exit(0)
-
-# 下载完整数据
+# 下载文件（GET 请求获取内容长度）
 try:
     r = requests.get(url, timeout=30)
     r.raise_for_status()
+    new_size = len(r.content)
 except Exception as e:
     print("Download failed:", e)
     exit(1)
 
+# 比较大小
+if old_size == new_size:
+    print(f"File size unchanged ({new_size} bytes), skipping JSON update.")
+    exit(0)
+
+# 解析数据
 lines = r.text.strip().split("\n")
 servers = []
 
@@ -53,12 +44,15 @@ for line in lines:
             "session": parts[4],
         })
 
+# 确保 data 目录存在
 os.makedirs("data", exist_ok=True)
+
+# 写入 JSON
 with open(data_path, "w", encoding="utf-8") as f:
     json.dump(servers, f, indent=2, ensure_ascii=False)
 
-# 保存当前文件大小
+# 保存新文件长度
 with open(size_path, "w", encoding="utf-8") as f:
     f.write(str(new_size))
 
-print(f"Updated {len(servers)} servers to {data_path}, size: {new_size}")
+print(f"Updated {len(servers)} servers. File size changed {old_size} → {new_size} bytes.")
