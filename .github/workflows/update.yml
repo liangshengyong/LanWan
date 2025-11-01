@@ -1,4 +1,4 @@
-name: fetch
+name: Fetch
 
 on:
   schedule:
