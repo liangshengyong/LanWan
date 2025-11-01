@@ -17,7 +17,7 @@ except Exception as e:
     exit(1)
 
 # 匹配所有 “SSTP 主机名 : ” 后面的域名（包括重复）
-hosts = re.findall(r"SSTP 主机名 : ([\w\.-]+)", html)
+hosts = re.findall(r"SSTP 主机名 :([\w\.-]+)", html)
 
 print(f"✅ Found {len(hosts)} SSTP hosts")
 
