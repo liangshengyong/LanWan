@@ -1,58 +1,29 @@
-import requests, json, os
+import re
+import json
+import requests
+import os
 
-url = "https://www.vpngate.net/api/iphone/"
-data_path = "data/servers.json"
-size_path = "data/last_length.txt"
+url = "https://www.vpngate.net/cn/"
+json_path = os.path.join("data", "servers.json")
 
-# 读取上次文件大小
-old_size = 0
-if os.path.exists(size_path):
-    try:
-        old_size = int(open(size_path, "r", encoding="utf-8").read().strip() or 0)
-    except:
-        old_size = 0
-
-# 下载文件（GET 请求获取内容长度）
 try:
-    r = requests.get(url, timeout=30)
+    print("Fetching page:", url)
+    r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
-    new_size = len(r.content)
+    html = r.text
+    print(f"Downloaded {len(html)} characters")
 except Exception as e:
-    print("Download failed:", e)
+    print("❌ Failed to fetch page:", e)
     exit(1)
 
-# 比较大小
-if old_size == new_size:
-    print(f"File size unchanged ({new_size} bytes), skipping JSON update.")
-    exit(0)
+# 匹配所有 “SSTP 主机名 : ” 后面的域名（包括重复）
+hosts = re.findall(r"SSTP 主机名 : ([\w\.-]+)", html)
 
-# 解析数据
-lines = r.text.strip().split("\n")
-servers = []
+print(f"✅ Found {len(hosts)} SSTP hosts")
 
-for line in lines:
-    if not line or line.startswith("*") or line.startswith("#"):
-        continue
-    parts = line.split(",")
-    if len(parts) > 14:
-        servers.append({
-            "ip": parts[1],
-            "hostname": parts[0],
-            "country": parts[5],
-            "score": parts[2],
-            "uptime": parts[3],
-            "session": parts[4],
-        })
-
-# 确保 data 目录存在
+# 保存为 JSON
 os.makedirs("data", exist_ok=True)
+with open(json_path, "w", encoding="utf-8") as f:
+    json.dump({"sstp_hosts": hosts}, f, ensure_ascii=False, indent=2)
 
-# 写入 JSON
-with open(data_path, "w", encoding="utf-8") as f:
-    json.dump(servers, f, indent=2, ensure_ascii=False)
-
-# 保存新文件长度
-with open(size_path, "w", encoding="utf-8") as f:
-    f.write(str(new_size))
-
-print(f"Updated {len(servers)} servers. File size changed {old_size} → {new_size} bytes.")
+print(f"✅ Saved to {json_path}")
