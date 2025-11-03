@@ -12,10 +12,11 @@ try:
     r.raise_for_status()
     html = r.text
 
-    # 高效正则匹配 SSTP 主机名（支持全角/半角冒号和多标签干扰）
+    # 正则匹配
     hosts = re.findall(
-        r"SSTP 主机名\s*[:：]\s*(?:<[^>]*>\s*)*([a-z0-9\.-]+\.[a-z]{2,})",
-        html
+        r"<tr[^>]*>.*?<span[^>]*>(\d{1,3}(?:\.\d{1,3}){3})</span>.*?L2TP/IPsec",
+        html,
+    re.DOTALL
     )
 
     # 未提取到主机名，直接退出
