@@ -14,10 +14,18 @@ try:
 
     # 正则匹配
     hosts = re.findall(
-        r"<tr[^>]*>.*?<span[^>]*>(\d{1,3}(?:\.\d{1,3}){3})</span>.*?L2TP/IPsec",
-        html,
-    re.DOTALL
-    )
+    r"""<tr[^>]*>                      # 一行开始
+        \s*<td[^>]*>.*?</td>\s*       # 跳过第一列（国旗等）
+        <td[^>]*>.*?                  # 进入第二列（主机名 + IP）
+        <span[^>]*>\s*                # IP 所在的 <span>
+        (\d{1,3}(?:\.\d{1,3}){3})     # 捕获 IPv4
+        \s*</span>.*?</td>            # 结束第二列
+        .*?L2TP/IPsec                 # 同一 <tr> 中必须包含 L2TP/IPsec
+        .*?</tr>                      # 结束这一行
+    """,
+    html,
+    flags=re.IGNORECASE | re.DOTALL | re.VERBOSE
+)
 
     # 未提取到主机名，直接退出
     if not hosts:
