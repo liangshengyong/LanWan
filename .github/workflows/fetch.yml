@@ -1,38 +1,50 @@
-name: Fetch L2TP Japan
+name: Fetch
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/10 * * * *"  # 每 10 分钟执行一次
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write  # 顶层权限（必须）
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write   # job 内必须再次声明，否则 push 无效
+
     steps:
+      # 1️⃣ 拉取仓库
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      # 2️⃣ Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
+      # 3️⃣ 依赖
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade requests beautifulsoup4
+          python -m pip install --upgrade requests bs4
 
+      # 4️⃣ 抓取
       - name: Run fetch script
         run: python fetch.py
 
-      - name: Commit and push if changed
+      # 5️⃣ 推送
+      - name: Commit and push changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
+          
           git add data/servers.txt
-          git diff --cached --quiet || git commit -m "Auto update servers.txt"
-          git diff --cached --quiet || git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:master
+          git commit -m "Auto update servers.txt" || echo "No changes"
+
+          git pull --rebase
+          git push
