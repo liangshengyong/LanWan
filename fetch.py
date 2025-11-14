@@ -1,50 +1,35 @@
 import requests
-from bs4 import BeautifulSoup
-import re
 import os
-import sys
 
-URL = "https://www.vpngate.net/en/"
+URL = "https://www.vpngate.net/api/iphone/"
 OUTPUT = "data/servers.txt"
 
+os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
 
-def fetch_servers():
+def fetch_l2tp_japan():
     try:
-        html = requests.get(URL, timeout=15).text
+        r = requests.get(URL, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
     except Exception as e:
-        print("Error downloading page:", e)
+        print("Error downloading API:", e)
         return []
 
-    soup = BeautifulSoup(html, "html.parser")
-    ips = set()
-
-    # 遍历所有行
-    for tr in soup.select("tr"):
-        tds = tr.find_all("td")
-        if len(tds) < 5:
+    hosts = set()
+    for line in r.text.splitlines():
+        if line.startswith("*") or not line.strip():
+            continue
+        cols = line.split(",")
+        if len(cols) < 15:
             continue
 
-        country_td = tds[0]
-        detail_td = tds[1]
-        l2tp_td = tds[4]  # 官方表格中第 5 列是 L2TP/IPsec 列
+        ip = cols[1].strip()
+        country = cols[5].strip()
+        l2tp = cols[14].strip()
 
-        # 必须是日本
-        if "Japan" not in country_td.get_text():
-            continue
+        if country == "Japan" and l2tp == "True":
+            hosts.add(ip)
 
-        # 必须支持 L2TP
-        if "L2TP" not in l2tp_td.get_text():
-            continue
-
-        # detail 里提取 IPv4
-        text = detail_td.get_text()
-        found_ip = re.findall(r"\b\d+\.\d+\.\d+\.\d+\b", text)
-
-        for ip in found_ip:
-            ips.add(ip)
-
-    return sorted(ips)
-
+    return sorted(hosts)
 
 def read_old():
     if not os.path.exists(OUTPUT):
@@ -52,31 +37,21 @@ def read_old():
     with open(OUTPUT, "r") as f:
         return [line.strip() for line in f if line.strip()]
 
-
 def save_new(ips):
-    """只有内容变化才写入"""
     old = read_old()
-
     if ips == old:
         print("✓ No change, skip writing.")
-        return False  # no update
-
+        return False
     if not ips:
         print("✗ No IP found, skip writing to avoid overwriting old file.")
         return False
 
-    os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
-
     with open(OUTPUT, "w") as f:
         for ip in ips:
             f.write(ip + "\n")
-
     print(f"✓ Updated {OUTPUT} with {len(ips)} IPs.")
-    return True  # updated
-
+    return True
 
 if __name__ == "__main__":
-    ips = fetch_servers()
-    changed = save_new(ips)
-    if not changed:
-        sys.exit(0)  # 不触发 commit
+    ips = fetch_l2tp_japan()
+    save_new(ips)
