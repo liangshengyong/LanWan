@@ -23,10 +23,11 @@ jobs:
         with:
           python-version: '3.x'
 
-      # 3️⃣ 安装依赖
+      # 3️⃣ 安装依赖（新增 beautifulsoup4）
       - name: Install dependencies
         run: |
           python -m pip install --upgrade requests
+          python -m pip install beautifulsoup4
 
       # 4️⃣ 运行抓取脚本
       - name: Run fetch script
