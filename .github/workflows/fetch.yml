@@ -1,8 +1,8 @@
-name: Fetch
+name: Fetch L2TP Japan
 
 on:
   schedule:
-    - cron: "*/10 * * * *"  # 每 10 分钟执行
+    - cron: "*/10 * * * *"  # 每 10 分钟执行一次
   workflow_dispatch:
 
 permissions:
@@ -13,29 +13,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ 拉取仓库
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ 设置 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
+      # 3️⃣ 安装依赖
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade requests beautifulsoup4
+          python -m pip install --upgrade requests
 
+      # 4️⃣ 运行抓取脚本
       - name: Run fetch script
         run: python fetch.py
 
+      # 5️⃣ Commit 并 push（仅在文件变化时）
       - name: Commit and push if needed
         run: |
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git config --global user.name "github-actions[bot]"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git add data/servers.txt
-            git commit -m "Auto update servers.txt"
-            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:master
-          else
-            echo "No changes to commit."
-          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/servers.txt
+          # 只在文件变化时 commit
+          git diff --cached --quiet || git commit -m "Auto update servers.txt"
+          git diff --cached --quiet || git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:master
