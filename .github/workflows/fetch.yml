@@ -2,42 +2,40 @@ name: Fetch
 
 on:
   schedule:
-    - cron: "*/10 * * * *"  # 每 10 分钟执行一次
-  workflow_dispatch:         # 手动触发
+    - cron: "*/10 * * * *"  # 每 10 分钟执行
+  workflow_dispatch:
 
 permissions:
-  contents: write  # 允许修改仓库内容
+  contents: write
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ 拉取仓库
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ 设置 Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      # 3️⃣ 安装依赖（新增 beautifulsoup4）
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade requests
-          python -m pip install beautifulsoup4
+          python -m pip install --upgrade requests beautifulsoup4
 
-      # 4️⃣ 运行抓取脚本
       - name: Run fetch script
         run: python fetch.py
 
-      # 5️⃣ 提交并推送变化
-      - name: Commit and push changes
+      - name: Commit and push if needed
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/servers.txt
-          git diff --cached --quiet || git commit -m "Auto update servers.txt"
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:master
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            git add data/servers.txt
+            git commit -m "Auto update servers.txt"
+            git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:master
+          else
+            echo "No changes to commit."
+          fi
