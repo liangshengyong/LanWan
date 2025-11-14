@@ -1,86 +1,82 @@
 import requests
 from bs4 import BeautifulSoup
+import re
 import os
-import random
+import sys
 
-url = "https://www.vpngate.net/cn/"
-save_path = "data/servers.txt"
-os.makedirs(os.path.dirname(save_path), exist_ok=True)
+URL = "https://www.vpngate.net/en/"
+OUTPUT = "data/servers.txt"
 
-# 随机UA，避免风控
-UA_LIST = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-]
 
-headers = {
-    "User-Agent": random.choice(UA_LIST),
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Referer": "https://www.vpngate.net/",
-}
+def fetch_servers():
+    try:
+        html = requests.get(URL, timeout=15).text
+    except Exception as e:
+        print("Error downloading page:", e)
+        return []
 
-session = requests.Session()
+    soup = BeautifulSoup(html, "html.parser")
+    ips = set()
 
-try:
-    # 先访问主页获取 cookie
-    session.get("https://www.vpngate.net/", headers=headers, timeout=10)
+    # 遍历所有行
+    for tr in soup.select("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 5:
+            continue
 
-    r = session.get(url, headers=headers, timeout=15)
-    r.raise_for_status()
+        country_td = tds[0]
+        detail_td = tds[1]
+        l2tp_td = tds[4]  # 官方表格中第 5 列是 L2TP/IPsec 列
 
-    soup = BeautifulSoup(r.text, "html.parser")
+        # 必须是日本
+        if "Japan" not in country_td.get_text():
+            continue
 
-    # vpngate 每个服务器是一个表格 <table class='vg_table'>
-    hosts = []
+        # 必须支持 L2TP
+        if "L2TP" not in l2tp_td.get_text():
+            continue
 
-    tables = soup.find_all("table", class_="vg_table_row")
-    if not tables:
-        tables = soup.find_all("table")  # 兼容旧版结构
+        # detail 里提取 IPv4
+        text = detail_td.get_text()
+        found_ip = re.findall(r"\b\d+\.\d+\.\d+\.\d+\b", text)
 
-    for table in tables:
-        rows = table.find_all("tr")
+        for ip in found_ip:
+            ips.add(ip)
 
-        # 检查是否为服务器条目
-        for row in rows:
-            cols = row.find_all("td")
-            if len(cols) < 12:
-                continue
+    return sorted(ips)
 
-            # 某一列包含 “L2TP/IPsec”
-            if not any("L2TP" in c.text for c in cols):
-                continue
 
-            # 通常 IP 在第 2 列或第 3 列
-            for col in cols:
-                text = col.get_text(strip=True)
-                if text.count(".") == 3:  # 简单判断IPv4
-                    hosts.append(text)
-                    break
+def read_old():
+    if not os.path.exists(OUTPUT):
+        return []
+    with open(OUTPUT, "r") as f:
+        return [line.strip() for line in f if line.strip()]
 
-    hosts = list(dict.fromkeys(hosts))  # 去重
 
-    if not hosts:
-        print("⚠️ 未匹配到任何 IP（结构变化），已自动适配失败。")
-        exit(0)
+def save_new(ips):
+    """只有内容变化才写入"""
+    old = read_old()
 
-    print(f"✅ 成功提取 {len(hosts)} 个 L2TP 服务器 IP")
-    print("前 10 个：", hosts[:10])
+    if ips == old:
+        print("✓ No change, skip writing.")
+        return False  # no update
 
-    # 加载旧文件
-    old_hosts = []
-    if os.path.exists(save_path):
-        with open(save_path, "r", encoding="utf-8") as f:
-            old_hosts = [line.strip() for line in f if line.strip()]
+    if not ips:
+        print("✗ No IP found, skip writing to avoid overwriting old file.")
+        return False
 
-    # 对比是否需要更新
-    if hosts == old_hosts:
-        print("ℹ️ 无变化，跳过写入。")
-    else:
-        with open(save_path, "w", encoding="utf-8") as f:
-            for h in hosts:
-                f.write(h + "\n")
-        print(f"✅ 已更新 {save_path}")
+    os.makedirs(os.path.dirname(OUTPUT), exist_ok=True)
 
-except Exception as e:
-    print("❌ 发生错误：", e)
+    with open(OUTPUT, "w") as f:
+        for ip in ips:
+            f.write(ip + "\n")
+
+    print(f"✓ Updated {OUTPUT} with {len(ips)} IPs.")
+    return True  # updated
+
+
+if __name__ == "__main__":
+    ips = fetch_servers()
+    changed = save_new(ips)
+    if not changed:
+        sys.exit(0)  # 不触发 commit
