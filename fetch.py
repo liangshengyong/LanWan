@@ -1,96 +1,86 @@
-import re
 import requests
+from bs4 import BeautifulSoup
 import os
 import random
 
 url = "https://www.vpngate.net/cn/"
 save_path = "data/servers.txt"
-
 os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-# 可选：随机 UA，避免固定 UA 被风控
+# 随机UA，避免风控
 UA_LIST = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Edge/121.0.0.0 Safari/537.36",
 ]
 
 headers = {
     "User-Agent": random.choice(UA_LIST),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,"
-              "image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": "https://www.vpngate.net/",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "DNT": "1",
 }
 
 session = requests.Session()
 
 try:
-    # 第一次 GET，拿到 cookies
+    # 先访问主页获取 cookie
     session.get("https://www.vpngate.net/", headers=headers, timeout=10)
 
-    # 访问中文页
     r = session.get(url, headers=headers, timeout=15)
     r.raise_for_status()
 
-    html = r.text
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    # -------- 正则匹配 L2TP 服务器 IP --------
-    # 来自浏览器源码的结构：
-    # <tr> ... L2TP/IPsec ... <td class="vg_table_row_1">123.123.123.123</td> ...
-    hosts = re.findall(
-        r"L2TP/IPsec[\s\S]{0,300}?>(\d{1,3}(?:\.\d{1,3}){3})<",
-        html,
-        flags=re.IGNORECASE
-    )
+    # vpngate 每个服务器是一个表格 <table class='vg_table'>
+    hosts = []
+
+    tables = soup.find_all("table", class_="vg_table_row")
+    if not tables:
+        tables = soup.find_all("table")  # 兼容旧版结构
+
+    for table in tables:
+        rows = table.find_all("tr")
+
+        # 检查是否为服务器条目
+        for row in rows:
+            cols = row.find_all("td")
+            if len(cols) < 12:
+                continue
+
+            # 某一列包含 “L2TP/IPsec”
+            if not any("L2TP" in c.text for c in cols):
+                continue
+
+            # 通常 IP 在第 2 列或第 3 列
+            for col in cols:
+                text = col.get_text(strip=True)
+                if text.count(".") == 3:  # 简单判断IPv4
+                    hosts.append(text)
+                    break
+
+    hosts = list(dict.fromkeys(hosts))  # 去重
 
     if not hosts:
-        print("⚠️ 未匹配到任何 IP，网页结构可能变化。")
+        print("⚠️ 未匹配到任何 IP（结构变化），已自动适配失败。")
         exit(0)
 
-    print(f"✅ 提取到 {len(hosts)} 个 L2TP/IPsec 服务器 IP。")
+    print(f"✅ 成功提取 {len(hosts)} 个 L2TP 服务器 IP")
+    print("前 10 个：", hosts[:10])
 
-    # -------- 加载旧文件 --------
+    # 加载旧文件
     old_hosts = []
     if os.path.exists(save_path):
-        try:
-            with open(save_path, "r", encoding="utf-8") as f:
-                old_hosts = [line.strip() for line in f if line.strip()]
-        except Exception:
-            print("⚠️ 读取旧数据失败，将覆盖。")
+        with open(save_path, "r", encoding="utf-8") as f:
+            old_hosts = [line.strip() for line in f if line.strip()]
 
-    # -------- 对比新旧数据 --------
+    # 对比是否需要更新
     if hosts == old_hosts:
-        print("ℹ️ IP 列表无变化，跳过更新。")
+        print("ℹ️ 无变化，跳过写入。")
     else:
         with open(save_path, "w", encoding="utf-8") as f:
             for h in hosts:
                 f.write(h + "\n")
-
-        print(f"✅ 已更新 servers.txt，共 {len(hosts)} 条")
-        print("📌 前 10 个：", hosts[:10])
+        print(f"✅ 已更新 {save_path}")
 
 except Exception as e:
-    print("❌ 错误：", e)
-
-    # 对比新旧数据
-    if hosts == old_hosts:
-        print("ℹ️ 主机名列表无变化，跳过更新。")
-    else:
-        # 按行写入 TXT
-        with open(save_path, "w", encoding="utf-8") as f:
-            for host in hosts:
-                f.write(host + "\n")
-        print(f"✅ 数据已更新，保存到 {save_path}")
-        print("前 10 个主机名：", hosts[:10])
-
-except Exception as e:
-    print("❌ 请求或解析失败：", e)
+    print("❌ 发生错误：", e)
