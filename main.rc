@@ -1,0 +1,29 @@
+﻿#pragma code_page(65001)
+#include "resource.h"
+#include "winuser.h"
+
+MAINICON_ID ICON "lanwan.ico"
+TRAYICON_ID ICON "tray.ico"
+
+1 RT_MANIFEST "main.manifest"
+
+IDR_MENU MENU
+BEGIN
+    POPUP "帮助(&H)"
+    BEGIN
+        MENUITEM "关于(&A)", ID_HELP_ABOUT
+    END
+END
+
+IDB_QRCODE_PNG RCDATA "qrcode.png"
+
+IDD_ABOUTBOX DIALOGEX 0, 0, 160, 200
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_CLIPCHILDREN | WS_SYSMENU | WS_EX_DLGMODALFRAME
+CAPTION "关于"
+BEGIN
+    ICON            MAINICON_ID,IDC_ABOUT_ICON,8,8,32,32,SS_ICON
+    LTEXT           "蓝湾 version 2026.1.1",IDC_ABOUT_VERSION,32,8,135,18
+    LTEXT           "一个开源L2TP/IPsec服务器测试程序",IDC_ABOUT_DESC,32,28,135,18
+    LTEXT           "支持作者",IDC_STATIC_SUPPORT_TEXT,32,48,135,18
+    DEFPUSHBUTTON   "确定",IDOK,64,180,58,14
+END
