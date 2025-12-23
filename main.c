@@ -152,9 +152,9 @@ typedef struct {
 
 
 #define IDC_LISTBOX 101
-#define IDC_BUTTON 102
+#define IDC_BUTTON_REFRESH 102
 #define IDC_STATUSBAR 103
-#define IDC_BUTTON_TRAVERSE 105
+#define IDC_BUTTON_CONNECT 105
 #define ID_LISTBOX_CONNECT 2001
 #define IDT_CONNECT_TIMEOUT 2002
 #define IDT_CONNECTDEVICE_TIMEOUT 2003
@@ -944,7 +944,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     UpdateWindow(hwnd);
 
     // Simulate a click on the refresh button after the window is shown
-    PostMessageW(hwnd, WM_COMMAND, MAKEWPARAM(IDC_BUTTON, 0), 0);
+    PostMessageW(hwnd, WM_COMMAND, MAKEWPARAM(IDC_BUTTON_REFRESH, 0), 0);
 
     // Run the message loop.
     MSG msg = { };
@@ -1021,10 +1021,10 @@ void UpdateFont(HWND hwnd)
     HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
     if (hListBox) SendMessageW(hListBox, WM_SETFONT, (WPARAM)hGuiFont, TRUE);
 
-    HWND hButton = GetDlgItem(hwnd, IDC_BUTTON);
+    HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
     if (hButton) SendMessageW(hButton, WM_SETFONT, (WPARAM)hGuiFont, TRUE);
 
-    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_TRAVERSE);
+    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
     if (hTraverseButton) SendMessageW(hTraverseButton, WM_SETFONT, (WPARAM)hGuiFont, TRUE);
 
     // Test button removed; no font to set
@@ -1300,7 +1300,7 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
 void UpdateTraverseButtonState(HWND hwnd)
 {
     HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
-    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_TRAVERSE);
+    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
     
     if (!hListBox || !hTraverseButton) return; 
     
@@ -1590,7 +1590,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             HWND hButton = CreateWindowW(
                 L"BUTTON", L"刷新",
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                220, 10, 100, 30, hwnd, (HMENU)IDC_BUTTON,
+                220, 10, 100, 30, hwnd, (HMENU)IDC_BUTTON_REFRESH,
                 (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), NULL);
             if (pfnSetWindowTheme) {
                 pfnSetWindowTheme(hButton, NULL, NULL);
@@ -1600,7 +1600,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             HWND hTraverseButton = CreateWindowW(
                 L"BUTTON", L"连接",
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                220, 50, 100, 30, hwnd, (HMENU)IDC_BUTTON_TRAVERSE,
+                220, 50, 100, 30, hwnd, (HMENU)IDC_BUTTON_CONNECT,
                 (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), NULL);
             if (pfnSetWindowTheme) {
                 pfnSetWindowTheme(hTraverseButton, NULL, NULL);
@@ -1670,8 +1670,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             int clientHeight = HIWORD(lParam);
 
             HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
-            HWND hButton = GetDlgItem(hwnd, IDC_BUTTON);
-            HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_TRAVERSE);
+            HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
+            HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
 
             UINT dpi = GetDpiForWindow(hwnd);
             if (dpi == 0) dpi = 96;
@@ -1808,9 +1808,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         }
                     }
                     break;
-                case IDC_BUTTON:
+                case IDC_BUTTON_REFRESH:
                 {
-                    HWND hButton = GetDlgItem(hwnd, IDC_BUTTON);
+                    HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
                     EnableWindow(hButton, FALSE);
                     SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"正在刷新...");
 
@@ -1829,7 +1829,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     }
                     break;
                 }
-                case IDC_BUTTON_TRAVERSE:
+                case IDC_BUTTON_CONNECT:
                 {
                     if (!EnsureVpnEntryExists(hwnd)) break;
 
@@ -1842,7 +1842,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         break; // User chose not to continue
                     }
 
-                    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_TRAVERSE);
+                    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
                     EnableWindow(hTraverseButton, FALSE);
                     SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"开始顺序连接...");
 
@@ -1941,7 +1941,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
 
         HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
-        HWND hButton = GetDlgItem(hwnd, IDC_BUTTON);
+        HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
 
         // Convert multi-byte string (UTF-8 from web) to wide-char string
         // Use the explicit data size instead of relying on null termination (-1)
@@ -1993,8 +1993,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
     case WM_DOWNLOAD_FAILURE:
     {
-        HWND hButton = GetDlgItem(hwnd, IDC_BUTTON);
-        HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_TRAVERSE);
+        HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
+        HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
         SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"刷新失败");
         EnableWindow(hButton, TRUE);
         // 如果列表框中仍有数据，则允许用户点击“依次连接”
@@ -2016,7 +2016,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_TRAVERSE_COMPLETE:
     {
         // Re-enable the traverse button when the traversal completes
-        HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_TRAVERSE);
+        HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
         if (hTraverseButton) {
             EnableWindow(hTraverseButton, TRUE);
         }
