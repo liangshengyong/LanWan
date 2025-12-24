@@ -151,10 +151,6 @@ typedef struct {
 } TRAVERSE_THREAD_DATA;
 
 
-#define IDC_LISTBOX 101
-#define IDC_BUTTON_REFRESH 102
-#define IDC_STATUSBAR 103
-#define IDC_BUTTON_CONNECT 105
 #define ID_LISTBOX_CONNECT 2001
 #define IDT_CONNECT_TIMEOUT 2002
 #define IDT_CONNECTDEVICE_TIMEOUT 2003
@@ -167,7 +163,7 @@ typedef struct {
 #define WM_APP_UPDATE_FONT (WM_APP + 8)
 
 // Window procedure function
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 HINSTANCE g_hInstance;
 
@@ -461,8 +457,8 @@ typedef struct {
 //
 #define WM_APP_TRAYMSG (WM_APP + 1)
 #define WM_APP_SHOW (WM_APP + 2)
-#define ID_TRAY_RESTORE 1001
-#define ID_TRAY_EXIT 1002
+#define ID_TRAY_RESTORE 3001
+#define ID_TRAY_EXIT 3002
 
 NOTIFYICONDATAW g_nid;
 
@@ -789,7 +785,6 @@ ULONG_PTR gdiplusToken;
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow)
 {
     g_hInstance = hInstance;
-    const wchar_t CLASS_NAME[]  = L"Sample Window Class";
     const wchar_t HELPER_CLASS_NAME[] = L"LanWanMenuHelper";
     const wchar_t MUTEX_NAME[] = L"Global\\LanWanApp_{E1F495A0-69A7-4A8A-9963-4C78A3A585A1}";
     const wchar_t CREATE_VPN_ARG[] = L"--create-vpn";
@@ -834,7 +829,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
 
     if (GetLastError() == ERROR_ALREADY_EXISTS)
     {
-        HWND hWnd = FindWindowW(CLASS_NAME, NULL);
+        HWND hWnd = FindWindowW(L"#32770", L"蓝湾");
         if (hWnd)
         {
             if (!IsWindowVisible(hWnd))
@@ -865,20 +860,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     gdiplusStartupInput.GdiplusVersion = 1;
     GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
 
-    // Register the window class.
-    WNDCLASSW wc = { };
-
-    wc.lpfnWndProc   = WindowProc;
-    wc.hInstance     = hInstance;
-    wc.lpszClassName = CLASS_NAME;
-    wc.lpszMenuName  = MAKEINTRESOURCEW(IDR_MENU);
-    HICON hWinIcon = NULL;
-    LoadIconWithScaleDown(hInstance, MAKEINTRESOURCEW(MAINICON_ID), GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), &hWinIcon);
-    wc.hIcon         = hWinIcon;
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE+1);
-
-    RegisterClassW(&wc);
-
     // Register a helper window class for the tray menu owner
     WNDCLASSW wc_helper = { 0 };
     wc_helper.lpfnWndProc   = DefWindowProcW;
@@ -892,36 +873,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     LoadIconWithScaleDown(hInstance, MAKEINTRESOURCEW(MAINICON_ID), smIconWidth, smIconHeight, &g_hIconConnected);
     LoadIconWithScaleDown(hInstance, MAKEINTRESOURCEW(TRAYICON_ID), smIconWidth, smIconHeight, &g_hIconDefault);
 
-
-    // Get the work area dimensions (excluding taskbar).
-    RECT workArea;
-    SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
-    int work_width = workArea.right - workArea.left;
-    int work_height = workArea.bottom - workArea.top;
-
-    // Calculate window dimensions using the golden ratio against the work area.
-    int window_width = (int)(work_width * 0.618);
-    int window_height = (int)(work_height * 0.618);
-
-    // Center the window in the work area.
-    int x = workArea.left + (work_width - window_width) / 2;
-    int y = workArea.top + (work_height - window_height) / 2;
-
-    // Create the window.
-    HWND hwnd = CreateWindowExW(
-        0,                              // Optional window styles.
-        CLASS_NAME,                     // Window class
-        L"蓝湾",                         // Window text
-        WS_OVERLAPPEDWINDOW,            // Window style
-
-        // Size and position
-        x, y, window_width, window_height,
-
-        NULL,       // Parent window    
-        NULL,       // Menu
-        hInstance,  // Instance handle
-        NULL        // Additional application data
-    );
+    HWND hwnd = CreateDialogW(hInstance, MAKEINTRESOURCE(IDD_MAIN_DIALOG), NULL, MainDlgProc);
 
     if (hwnd == NULL)
     {
@@ -950,8 +902,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     MSG msg = { };
     while (GetMessage(&msg, NULL, 0, 0) > 0)
     {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        if (!IsDialogMessage(hwnd, &msg))
+        {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
     }
 
     // Shutdown GDI+ 
@@ -1070,7 +1025,7 @@ BOOL RunCommand(wchar_t* command) {
 VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASCONN hrasconn)
 {
     // Find the main window and its status bar
-    HWND hMainWindow = FindWindowW(L"Sample Window Class", NULL);
+    HWND hMainWindow = FindWindowW(L"#32770", L"蓝湾");
     if (!hMainWindow) return;
     HWND hStatusBar = GetDlgItem(hMainWindow, IDC_STATUSBAR);
     if (!hStatusBar) return;
@@ -1562,54 +1517,35 @@ BOOL CheckAndConfirmDisconnect(HWND hwnd)
     return TRUE; // Proceed
 }
 
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg)
     {
-    case WM_CREATE:
+    case WM_INITDIALOG:
         {
-            // Create a list box
-            CreateWindowW(
-                L"LISTBOX",
-                NULL,
-                WS_CHILD | WS_VISIBLE | WS_BORDER | LBS_STANDARD,
-                10, 10, 200, 300,
-                hwnd,
-                (HMENU)IDC_LISTBOX,
-                (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE),
-                NULL);
+            // Get the work area dimensions (excluding taskbar).
+            RECT workArea;
+            SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
+            int work_width = workArea.right - workArea.left;
+            int work_height = workArea.bottom - workArea.top;
 
-            // --- Theming and Button Setup ---
-            HMODULE hUxtheme = LoadLibraryW(L"uxtheme.dll");
-            PFN_SETWINDOWTHEME pfnSetWindowTheme = NULL;
-            if (hUxtheme) {
-                pfnSetWindowTheme = (PFN_SETWINDOWTHEME)GetProcAddress(hUxtheme, "SetWindowTheme");
-            }
+            // Calculate window dimensions using the golden ratio against the work area.
+            int window_width = (int)(work_width * 0.618);
+            int window_height = (int)(work_height * 0.618);
 
-            // Create a button
-            HWND hButton = CreateWindowW(
-                L"BUTTON", L"刷新",
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                220, 10, 100, 30, hwnd, (HMENU)IDC_BUTTON_REFRESH,
-                (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), NULL);
-            if (pfnSetWindowTheme) {
-                pfnSetWindowTheme(hButton, NULL, NULL);
-            }
-
-            // Create a traverse test button
-            HWND hTraverseButton = CreateWindowW(
-                L"BUTTON", L"连接",
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                220, 50, 100, 30, hwnd, (HMENU)IDC_BUTTON_CONNECT,
-                (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), NULL);
-            if (pfnSetWindowTheme) {
-                pfnSetWindowTheme(hTraverseButton, NULL, NULL);
-            }
-            if (hUxtheme) {
-                FreeLibrary(hUxtheme);
-            }
+            // Center the window in the work area.
+            int x = workArea.left + (work_width - window_width) / 2;
+            int y = workArea.top + (work_height - window_height) / 2;
             
+            SetWindowPos(hwnd, NULL, x, y, window_width, window_height, SWP_NOZORDER);
 
+            // Set window icons
+            HICON hIcon = NULL;
+            LoadIconWithScaleDown(g_hInstance, MAKEINTRESOURCE(MAINICON_ID), GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), &hIcon);
+            SendMessage(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+            LoadIconWithScaleDown(g_hInstance, MAKEINTRESOURCE(MAINICON_ID), GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), &hIcon);
+            SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+            
             // Create the status bar.
             hStatusBar = CreateWindowExW(
                 0,
@@ -1619,7 +1555,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 0, 0, 0, 0,
                 hwnd,
                 (HMENU)IDC_STATUSBAR,
-                (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE),
+                g_hInstance,
                 NULL);
             
             SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"就绪");
@@ -1627,8 +1563,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             UpdateFont(hwnd);
             UpdateTraverseButtonState(hwnd);
             AddTrayIcon(hwnd);
+
+            // Perform initial layout to avoid flicker on startup
+            RECT rcClient;
+            GetClientRect(hwnd, &rcClient);
+            SendMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rcClient.right - rcClient.left, rcClient.bottom - rcClient.top));
         }
-        break;
+        return (INT_PTR)TRUE;
 
     case WM_DPICHANGED:
         {
@@ -1653,7 +1594,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             GetWindowRect(hwnd, &g_rcOriginalWindowPos);
         }
         ShowWindow(hwnd, SW_HIDE);
-        return 0;
+        return (INT_PTR)TRUE;
 
     case WM_SIZE:
         {
@@ -1759,7 +1700,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             DeleteObject(hGuiFont);
         }
         PostQuitMessage(0);
-        return 0;
+        return (INT_PTR)TRUE;
 
     case WM_COMMAND:
         {
@@ -1942,6 +1883,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
         HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
         HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
+        
+        // Preserve selection
+        wchar_t* selectedText = NULL;
+        int selectedIndex = (int)SendMessageW(hListBox, LB_GETCURSEL, 0, 0);
+        if (selectedIndex != LB_ERR)
+        {
+            int textLen = (int)SendMessageW(hListBox, LB_GETTEXTLEN, selectedIndex, 0);
+            if (textLen > 0)
+            {
+                selectedText = (wchar_t*)malloc((textLen + 1) * sizeof(wchar_t));
+                if (selectedText)
+                {
+                    SendMessageW(hListBox, LB_GETTEXT, selectedIndex, (LPARAM)selectedText);
+                }
+            }
+        }
 
         // Convert multi-byte string (UTF-8 from web) to wide-char string
         // Use the explicit data size instead of relying on null termination (-1)
@@ -1975,6 +1932,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
         free(pszData); // Free the original buffer
         free(pData);   // Free the container struct
+
+        // Restore selection
+        if (selectedText)
+        {
+            int newIndex = (int)SendMessageW(hListBox, LB_FINDSTRINGEXACT, -1, (LPARAM)selectedText);
+            if (newIndex != LB_ERR)
+            {
+                SendMessageW(hListBox, LB_SETCURSEL, newIndex, 0);
+            }
+            free(selectedText);
+        }
 
         // Get the number of items in the list box
         LRESULT serverCount = SendMessageW(hListBox, LB_GETCOUNT, 0, 0);
@@ -2058,7 +2026,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             // Background is now handled by the window class brush.
             EndPaint(hwnd, &ps);
         }
-        return 0;
+        return (INT_PTR)TRUE;
     
     case WM_APP_SHOW:
         RestoreWindow(hwnd);
@@ -2088,5 +2056,5 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
 
     }
-    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    return (INT_PTR)FALSE;
 }
