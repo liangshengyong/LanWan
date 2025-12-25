@@ -787,6 +787,25 @@ BOOL CreateVpnEntry()
 }
 
 
+void DisconnectOnExit()
+{
+    RASCONNW conn[10];
+    DWORD connSize = sizeof(conn);
+    DWORD numConn = 0;
+    conn[0].dwSize = sizeof(RASCONNW);
+
+    if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
+        for (DWORD i = 0; i < numConn; i++) {
+            if (wcscmp(conn[i].szEntryName, L"蓝湾网络") == 0) {
+                RasHangUpW(conn[i].hrasconn);
+                // Initiated hangup. The process will exit, and the OS will clean up the connection.
+                // No need to wait here, which avoids blocking the exit process.
+                break; // Assuming we only care about hanging up one.
+            }
+        }
+    }
+}
+
 GdiplusStartupInput gdiplusStartupInput;
 ULONG_PTR gdiplusToken;
 
@@ -916,6 +935,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
             DispatchMessage(&msg);
         }
     }
+
+    DisconnectOnExit();
 
     // Shutdown GDI+ 
     GdiplusShutdown(gdiplusToken);
