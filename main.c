@@ -499,9 +499,12 @@ void UpdateTrayIcon(BOOL isConnected)
 {
     if (isConnected) {
         g_nid.hIcon = g_hIconConnected;
+        wcscpy_s(g_nid.szTip, sizeof(g_nid.szTip)/sizeof(wchar_t), L"蓝湾 已连接");
     } else {
         g_nid.hIcon = g_hIconDefault;
+        wcscpy_s(g_nid.szTip, sizeof(g_nid.szTip)/sizeof(wchar_t), L"蓝湾 未连接");
     }
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     Shell_NotifyIconW(NIM_MODIFY, &g_nid);
 }
 
@@ -643,13 +646,10 @@ void AddTrayIcon(HWND hwnd)
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_APP_TRAYMSG;
     g_nid.hIcon = g_hIconDefault;
-    wcscpy_s(g_nid.szTip, sizeof(g_nid.szTip)/sizeof(wchar_t), L"蓝湾");
+    wcscpy_s(g_nid.szTip, sizeof(g_nid.szTip)/sizeof(wchar_t), L"蓝湾 未连接");
 
     if (!Shell_NotifyIconW(NIM_ADD, &g_nid)) {
         ShowTaskDialog(hwnd, L"错误", L"未能添加托盘图标！", NULL, TDCBF_OK_BUTTON, TD_ERROR_ICON, NULL);
-    } else {
-        g_nid.uVersion = NOTIFYICON_VERSION_4;
-        Shell_NotifyIconW(NIM_SETVERSION, &g_nid);
     }
 }
 
@@ -685,22 +685,7 @@ void ShowTrayContextMenu(HWND hwnd)
     POINT pt;
     GetCursorPos(&pt);
 
-    // --- Last Resort: AttachThreadInput Hack ---
-    // This is an aggressive technique to steal foreground rights when all else fails.
-    DWORD foregroundThreadId = 0;
-    DWORD currentThreadId = GetCurrentThreadId();
-    HWND foregroundHwnd = GetForegroundWindow();
-    if (foregroundHwnd) {
-        foregroundThreadId = GetWindowThreadProcessId(foregroundHwnd, NULL);
-    }
-
-    if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId) {
-        AttachThreadInput(foregroundThreadId, currentThreadId, TRUE);
-    }
-    // ---
-
-    // Show helper window and set it as foreground.
-    ShowWindow(g_hMenuOwnerWnd, SW_SHOWNOACTIVATE);
+    // This is the crucial part to make the menu disappear correctly.
     SetForegroundWindow(g_hMenuOwnerWnd);
     
     UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON;
@@ -723,14 +708,8 @@ void ShowTrayContextMenu(HWND hwnd)
     // Use the helper window as the owner for TrackPopupMenu.
     int command = TrackPopupMenu(hPopupMenu, flags, pt.x, pt.y, 0, g_hMenuOwnerWnd, NULL);
     
-    // Hide the helper window again.
-    ShowWindow(g_hMenuOwnerWnd, SW_HIDE);
-
-    // --- Detach from the foreground thread's input ---
-    if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId) {
-        AttachThreadInput(foregroundThreadId, currentThreadId, FALSE);
-    }
-    // ---
+    // Post a null message to the helper window to help fix focus issues after the menu is closed.
+    PostMessage(g_hMenuOwnerWnd, WM_NULL, 0, 0);
 
     DestroyMenu(hPopupMenu);
 
@@ -2130,27 +2109,16 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         break;
     
     case WM_APP_TRAYMSG:
-        switch (LOWORD(lParam))
+        switch (lParam) // For legacy notifications, the message is directly in lParam
         {
-            case WM_CONTEXTMENU:
+            case WM_LBUTTONDBLCLK:
+                PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(ID_TRAY_RESTORE, 0), 0);
+                break;
+            case WM_RBUTTONUP:
                 ShowTrayContextMenu(hwnd);
                 break;
-            case WM_LBUTTONDBLCLK:
-                if (IsWindowVisible(hwnd))
-                {
-                    if (IsIconic(hwnd))
-                    {
-                        ShowWindow(hwnd, SW_RESTORE);
-                    }
-                    SetForegroundWindow(hwnd);
-                }
-                else
-                {
-                    RestoreWindow(hwnd);
-                }
-                break;
         }
-        break;
+        return (INT_PTR)TRUE;
 
     }
     return (INT_PTR)FALSE;
