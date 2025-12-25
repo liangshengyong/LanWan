@@ -87,6 +87,10 @@
 #define DNLEN 15
 #endif
 
+#ifndef ERROR_ALREADY_DIALING
+#define ERROR_ALREADY_DIALING 801
+#endif
+
 #ifndef RASEO_ProhibitEAP
 #define RASEO_ProhibitEAP 0x00010000
 #endif
@@ -812,9 +816,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     g_hInstance = hInstance;
     const wchar_t HELPER_CLASS_NAME[] = L"LanWanMenuHelper";
     const wchar_t MUTEX_NAME[] = L"Global\\LanWanApp_{E1F495A0-69A7-4A8A-9963-4C78A3A585A1}";
-    const wchar_t CREATE_VPN_ARG[] = L"--create-vpn";
+    const wchar_t CREATE_VPN_ARG[] = L"init";
 
-    // If called with --create-vpn, create the entry and exit.
+    // If called with init, create the entry and exit.
     if (wcscmp(lpCmdLine, CREATE_VPN_ARG) == 0)
     {
         if (CreateVpnEntry()) {
@@ -1266,18 +1270,37 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     }
     else
     {
-        wchar_t errorStr[256];
-        wchar_t finalErrorMsg[512];
-        if (RasGetErrorStringW(rasResult, errorStr, 256) == 0)
+        // If dialing fails because the connection is already being dialed (stuck),
+        // try to force a disconnect and inform the user to retry.
+        if (rasResult == ERROR_ALREADY_DIALING) // 801
         {
-            swprintf_s(finalErrorMsg, 512, L"拨号启动失败: %s", errorStr);
+            wchar_t cmd[256];
+            swprintf_s(cmd, ARRAYSIZE(cmd), L"rasdial \"%s\" /disconnect", L"蓝湾网络");
+
+            wchar_t* hangupMsg = _wcsdup(L"连接似乎已拨或卡住，正在尝试强制断开...");
+            if(hangupMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)hangupMsg);
+
+            RunCommand(cmd); // Synchronously run the disconnect command
+
+            wchar_t* retryMsg = _wcsdup(L"已发送断开指令，请稍后重试。");
+            if(retryMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)retryMsg);
         }
         else
         {
-            swprintf_s(finalErrorMsg, 512, L"拨号启动失败: 未知错误 %lu", rasResult);
+            wchar_t errorStr[256];
+            wchar_t finalErrorMsg[512];
+            if (RasGetErrorStringW(rasResult, errorStr, 256) == 0)
+            {
+                swprintf_s(finalErrorMsg, 512, L"拨号启动失败: %s (%lu)", errorStr, rasResult);
+            }
+            else
+            {
+                swprintf_s(finalErrorMsg, 512, L"拨号启动失败: 未知错误 %lu", rasResult);
+            }
+            statusMsg = _wcsdup(finalErrorMsg);
+            if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
         }
-        statusMsg = _wcsdup(finalErrorMsg);
-        if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
+
         g_hRasConn = NULL;
         return 1;
     }
@@ -1479,7 +1502,7 @@ BOOL EnsureVpnEntryExists(HWND hwnd)
             sei.fMask = SEE_MASK_NOCLOSEPROCESS;
             sei.lpVerb = L"runas";
             sei.lpFile = szPath;
-            sei.lpParameters = L"--create-vpn";
+            sei.lpParameters = L"init";
             sei.hwnd = NULL;
             sei.nShow = SW_HIDE;
             
@@ -1554,6 +1577,23 @@ BOOL CheckAndConfirmDisconnect(HWND hwnd)
     return TRUE; // Proceed
 }
 
+static void UpdateStatusBarParts(HWND hwnd, UINT dpi)
+{
+    if (dpi == 0)
+    {
+        dpi = GetDpiForWindow(hwnd);
+        if (dpi == 0) dpi = 96;
+    }
+
+    int textWidth = GetTextWidth(hStatusBar, hGuiFont, L"99 台服务器"); // Max expected text
+    int paddingDIP = 6;
+    int totalPaddingPX = DpiScale(paddingDIP * 2, dpi);
+    int partWidth = textWidth + totalPaddingPX;
+
+    int parts[2] = { partWidth, -1 };
+    SendMessageW(hStatusBar, SB_SETPARTS, 2, (LPARAM)parts);
+}
+
 INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg)
@@ -1597,18 +1637,15 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             
             UpdateFont(hwnd); // Moved here
 
-            UINT dpi = GetDpiForWindow(hwnd); // Re-insert dpi declaration
-            if (dpi == 0) dpi = 96;            // Re-insert dpi initialization
-
-            int textWidth = GetTextWidth(hStatusBar, hGuiFont, L"99 台服务器"); // Max expected text
-            int paddingDIP = 6; // 6 DIP padding
-            int totalPaddingPX = DpiScale(paddingDIP * 2, dpi); // Left and right padding
-            int partWidth = textWidth + totalPaddingPX;
-
-            int parts[2] = { partWidth, -1 }; // Part 1: calculated width, Part 2: remaining space
-            SendMessageW(hStatusBar, SB_SETPARTS, 2, (LPARAM)parts);
+            UpdateStatusBarParts(hwnd, 0);
             
-            SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"- 台服务器");
+            // Add a default server entry on initialization
+            HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
+            SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)L"14.132.22.67");
+            SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)L"1.66.33.164");
+
+            // Update status bar for the default entry
+            SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"2 台服务器");
             SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"就绪");
             
             UpdateTraverseButtonState(hwnd);
@@ -1625,6 +1662,10 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             UpdateFont(hwnd);
 
+            UINT dpi = HIWORD(wParam);
+
+            UpdateStatusBarParts(hwnd, dpi);
+
             // The WM_DPICHANGED message recommends resizing the window based on the suggested rect.
             RECT* const prcNewWindow = (RECT*)lParam;
             SetWindowPos(hwnd,
@@ -1634,6 +1675,9 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 prcNewWindow->right - prcNewWindow->left,
                 prcNewWindow->bottom - prcNewWindow->top,
                 SWP_NOZORDER | SWP_NOACTIVATE);
+            
+            // Force a repaint of the window and its children to apply layout and font changes.
+            RedrawWindow(hwnd, NULL, NULL, RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
         }
         break;
 
@@ -1655,14 +1699,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             SendMessageW(hStatusBar, WM_SIZE, wParam, lParam);
 
             // Re-apply parts to handle resizing correctly.
-            // Calculate width based on text and padding
-            int textWidth = GetTextWidth(hStatusBar, hGuiFont, L"999 台服务器"); // Max expected text
-            int paddingDIP = 8; // 8 DIP padding
-            int totalPaddingPX = DpiScale(paddingDIP * 2, dpi); // Left and right padding
-            int partWidth = textWidth + totalPaddingPX;
-
-            int parts[2] = { partWidth, -1 };
-            SendMessageW(hStatusBar, SB_SETPARTS, 2, (LPARAM)parts);
+            UpdateStatusBarParts(hwnd, dpi);
 
             // Get the height of the status bar.
             RECT rectStatusBar;
@@ -1677,11 +1714,11 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
             HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
 
-            // Removed the redefinition of dpi
-            int padding = MulDiv(10, dpi, 96);
-            int buttonWidth = MulDiv(100, dpi, 96);
-            int buttonHeight = MulDiv(30, dpi, 96);
-            int buttonPadding = MulDiv(5, dpi, 96);
+            // Use DpiScale for consistency
+            int padding = DpiScale(10, dpi);
+            int buttonWidth = DpiScale(100, dpi);
+            int buttonHeight = DpiScale(30, dpi);
+            int buttonPadding = DpiScale(5, dpi);
 
 
             SetWindowPos(hListBox, NULL, padding, padding, clientWidth - buttonWidth - (padding*3), clientHeight - statusBarHeight - (padding*2), SWP_NOZORDER);
@@ -2010,7 +2047,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)serverCountText);
 
         // Update the second part with the success message
-        SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"刷新成功");
+        SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"已刷新");
         
         EnableWindow(hButton, TRUE);
         
