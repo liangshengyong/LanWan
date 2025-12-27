@@ -158,6 +158,7 @@ typedef struct {
 #define ID_LISTBOX_CONNECT 2001
 #define IDT_CONNECT_TIMEOUT 2002
 #define IDT_CONNECTDEVICE_TIMEOUT 2003
+#define ID_LISTBOX_COPY 2004
 
 // Custom messages for download thread
 #define WM_DOWNLOAD_SUCCESS (WM_APP + 3)
@@ -488,6 +489,8 @@ typedef struct {
 #define WM_APP_SHOW (WM_APP + 2)
 #define ID_TRAY_RESTORE 3001
 #define ID_TRAY_EXIT 3002
+#define ID_TRAY_CONNECT 3003
+#define ID_TRAY_DISCONNECT 3004
 
 NOTIFYICONDATAW g_nid;
 
@@ -679,8 +682,31 @@ void ShowTrayContextMenu(HWND hwnd)
     }
 
     HMENU hPopupMenu = CreatePopupMenu();
-    InsertMenuW(hPopupMenu, 0, MF_BYPOSITION | MF_STRING, ID_TRAY_RESTORE, L"显示主窗口");
-    InsertMenuW(hPopupMenu, 1, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"退出");
+    InsertMenuW(hPopupMenu, 0, MF_BYPOSITION | MF_STRING | MF_DEFAULT, ID_TRAY_RESTORE, L"显示主窗口");
+    InsertMenuW(hPopupMenu, 1, MF_BYPOSITION | MF_STRING, ID_TRAY_CONNECT, L"顺序连接");
+
+    // Check connection status to enable/disable "Disconnect"
+    BOOL isConnected = FALSE;
+    RASCONNW conn[1];
+    DWORD connSize = sizeof(conn);
+    DWORD numConn = 0;
+    conn[0].dwSize = sizeof(RASCONNW);
+    if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
+        for (DWORD i = 0; i < numConn; i++) {
+            if (wcscmp(conn[i].szEntryName, L"蓝湾网络") == 0) {
+                isConnected = TRUE;
+                break;
+            }
+        }
+    }
+
+    UINT disconnectFlags = MF_BYPOSITION | MF_STRING;
+    if (!isConnected) {
+        disconnectFlags |= MF_GRAYED;
+    }
+    InsertMenuW(hPopupMenu, 2, disconnectFlags, ID_TRAY_DISCONNECT, L"断开");
+
+    InsertMenuW(hPopupMenu, 3, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"退出");
 
     POINT pt;
     GetCursorPos(&pt);
@@ -1766,7 +1792,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                                 SendMessageW(hListBox, LB_SETCURSEL, item_index, 0);
                                 
                                 HMENU hPopupMenu = CreatePopupMenu();
-                                InsertMenuW(hPopupMenu, 0, MF_BYPOSITION | MF_STRING, ID_LISTBOX_CONNECT, L"连接");
+                                InsertMenuW(hPopupMenu, 0, MF_BYPOSITION | MF_STRING | MF_DEFAULT, ID_LISTBOX_CONNECT, L"连接");
+                                InsertMenuW(hPopupMenu, 1, MF_BYPOSITION | MF_STRING, ID_LISTBOX_COPY, L"复制");
 
                                 SetForegroundWindow(hwnd);
                                 int command = TrackPopupMenu(hPopupMenu, TPM_TOPALIGN | TPM_LEFTALIGN | TPM_RETURNCMD, pts.x, pts.y, 0, hwnd, NULL);
@@ -1804,8 +1831,6 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     if (HIWORD(wParam) == LBN_DBLCLK)
                     {
                         if (!EnsureVpnEntryExists(hwnd)) break;
-
-                        if (!CheckAndConfirmDisconnect(hwnd)) break;
 
                         HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
                         int index = (int)SendMessageW(hListBox, LB_GETCURSEL, 0, 0);
@@ -1864,6 +1889,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     }
                     break;
                 }
+                case ID_TRAY_CONNECT:
                 case IDC_BUTTON_CONNECT:
                 {
                     if (!EnsureVpnEntryExists(hwnd)) break;
@@ -1928,6 +1954,27 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 case ID_TRAY_EXIT:
                     DestroyWindow(hwnd);
                     break;
+                case ID_TRAY_DISCONNECT:
+                    {
+                        RASCONNW conn[10];
+                        DWORD connSize = sizeof(conn);
+                        DWORD numConn = 0;
+                        conn[0].dwSize = sizeof(RASCONNW);
+
+                        if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
+                            for (DWORD i = 0; i < numConn; i++) {
+                                if (wcscmp(conn[i].szEntryName, L"蓝湾网络") == 0) {
+                                    RasHangUpW(conn[i].hrasconn);
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Update UI immediately after initiating hangup.
+                        SendMessageW(GetDlgItem(hwnd, IDC_STATUSBAR), SB_SETTEXTW, 1, (LPARAM)L"连接已断开");
+                        UpdateTrayIcon(FALSE);
+                    }
+                    break;
                 // "测试" menu and test button removed
                 case ID_LISTBOX_CONNECT:
                     {
@@ -1950,6 +1997,43 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                                     // Call the VPN connection function
                                     ConnectVpn(hwnd, buffer);
 
+                                    free(buffer);
+                                }
+                            }
+                        }
+                    }
+                    break;
+                case ID_LISTBOX_COPY:
+                    {
+                        HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
+                        int index = (int)SendMessageW(hListBox, LB_GETCURSEL, 0, 0);
+                        if (index != LB_ERR)
+                        {
+                            int len = (int)SendMessageW(hListBox, LB_GETTEXTLEN, index, 0);
+                            if (len > 0)
+                            {
+                                wchar_t* buffer = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
+                                if (buffer)
+                                {
+                                    SendMessageW(hListBox, LB_GETTEXT, index, (LPARAM)buffer);
+                                    
+                                    if (OpenClipboard(hwnd))
+                                    {
+                                        EmptyClipboard();
+                                        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, (len + 1) * sizeof(wchar_t));
+                                        if (hg)
+                                        {
+                                            wchar_t* p = (wchar_t*)GlobalLock(hg);
+                                            if (p)
+                                            {
+                                                wcscpy_s(p, len + 1, buffer);
+                                                GlobalUnlock(hg);
+                                                SetClipboardData(CF_UNICODETEXT, hg);
+                                            }
+                                        }
+                                        CloseClipboard();
+                                    }
+                                    
                                     free(buffer);
                                 }
                             }
