@@ -1,10 +1,10 @@
-# 项目简介
+# 蓝湾
 
-蓝湾是一个 L2TP/IPsec 服务器测试程序。
+是一个 L2TP/IPsec 服务器测试程序。
 
 ---
 
-## 🖥️ Screenshot
+## 🖥️ 屏幕截图
 
 ![screenshot](docs/screenshot.png)
 
