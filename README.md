@@ -1,6 +1,6 @@
 # 蓝湾
 
-是一个 L2TP/IPsec 服务器测试程序。
+是一个 L2TP/IPsec 服务器测试程序
 
 ---
 
@@ -10,7 +10,7 @@
 
 ---
 
-## 🚀 使用说明
+## 🚀 使用方法
 
 1. 无需安装，双击“蓝湾.exe”启动程序
 2. 点击「刷新列表」获取服务器列表
@@ -29,7 +29,7 @@
 
 ---
 
-## 📄 License
+## 📄 许可证
 
 Source code is licensed under the **MIT License**.
 
