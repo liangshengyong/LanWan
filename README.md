@@ -25,7 +25,7 @@
 
 ---
 
-## ⚠️ Notes
+## ⚠️ 注意事项
 
 - 本工具仅用于学习和技术研究
 - 请遵守当地法律法规
@@ -36,5 +36,7 @@
 ## 📄 License
 
 Source code is licensed under the **MIT License**.
+
 Prebuilt binaries are provided for convenience, **without any warranty**.
+
 See the [LICENSE](LICENSE) file for details.
