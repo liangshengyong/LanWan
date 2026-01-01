@@ -12,6 +12,7 @@
 
 ## 🚀 使用方法
 
+点击 [这里](https://github.com/liangshengyong/LanWan/releases/latest) 下载最新版本
 1. 无需安装，双击启动程序
 2. 点击「刷新列表」获取服务器列表
 3. 点击「顺序连接」对服务器列表中的服务器依次进行测试连接
