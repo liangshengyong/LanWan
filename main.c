@@ -9,7 +9,9 @@
 #include <commctrl.h>
 #include <wchar.h>
 #include <shellapi.h>
+#define INITGUID
 #include <shlobj.h>
+#include <knownfolders.h>
 #include <shellscalingapi.h>
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
@@ -115,22 +117,6 @@
 #define SHGSI_SHELLICONSIZE 0x4
 #endif
 
-typedef struct _RASAUTHDATA {
-  DWORD dwAuthFlags;
-  union {
-    struct {
-      WCHAR szUserName[UNLEN + 1];
-      WCHAR szPassword[PWLEN + 1];
-      WCHAR szLogonDomain[DNLEN + 1];
-    } s_Ez;
-    struct {
-      LPWSTR lpszUserName;
-      LPWSTR lpszPassword;
-      LPWSTR lpszLogonDomain;
-    } s_Pointers;
-  } anon_union; // Use anon_union for GCC compatibility
-} RASAUTHDATA, *PRASAUTHDATA;
-
 // Define function pointer for SetWindowTheme for dynamic loading
 typedef HRESULT(WINAPI* PFN_SETWINDOWTHEME)(HWND, LPCWSTR, LPCWSTR);
 
@@ -159,6 +145,7 @@ typedef struct {
 #define IDT_CONNECT_TIMEOUT 2002
 #define IDT_CONNECTDEVICE_TIMEOUT 2003
 #define ID_LISTBOX_COPY 2004
+#define ID_LISTBOX_DISCONNECT 2005
 
 // Custom messages for download thread
 #define WM_DOWNLOAD_SUCCESS (WM_APP + 3)
@@ -166,6 +153,8 @@ typedef struct {
 #define WM_VPN_STATUS_UPDATE (WM_APP + 5)
 #define WM_TRAVERSE_COMPLETE (WM_APP + 7)
 #define WM_APP_UPDATE_FONT (WM_APP + 8)
+#define WM_APP_UPDATE_CHECK_SUCCESS (WM_APP + 9)
+#define WM_APP_UPDATE_CHECK_FAILURE (WM_APP + 10)
 
 // Window procedure function
 INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -180,6 +169,9 @@ wchar_t g_currentConnectingServerIp[256] = {0};
 
 // Global variable to store the IP of the last successfully connected server during traverse
 wchar_t g_lastSuccessfullyConnectedIp[256] = {0};
+
+// Global variable to store the IP of the currently connected server
+wchar_t g_connectedIp[256] = {0};
 
 // Callback function to set the font for each child window
 BOOL CALLBACK EnumChildProc(HWND hwnd, LPARAM lParam)
@@ -239,20 +231,20 @@ static void RepositionAboutControls(HWND hDlg)
     int textWidth = clientWidth - textX - padding;
     if (textWidth < 0) textWidth = 0;
 
-    // Version
-    HWND hVersion = GetDlgItem(hDlg, IDC_ABOUT_VERSION);
-    if (hVersion)
+    // 程序名称
+    HWND hName = GetDlgItem(hDlg, IDC_ABOUT_NAME);
+    if (hName)
     {
-        SetWindowPos(hVersion, NULL, textX, yPos, textWidth, textHeight, SWP_NOZORDER);
+        SetWindowPos(hName, NULL, textX, yPos, textWidth, textHeight, SWP_NOZORDER);
         yPos += textHeight;
     }
 
     // Description
-    HWND hDesc = GetDlgItem(hDlg, IDC_ABOUT_DESC);
+    HWND hDesc = GetDlgItem(hDlg, IDC_ABOUT_VERSION);
     if (hDesc)
     {
         SetWindowPos(hDesc, NULL, textX, yPos, textWidth, textHeight, SWP_NOZORDER);
-        yPos += textHeight;
+        yPos += textHeight * 2;
     }
 
     // Support author text
@@ -267,7 +259,7 @@ static void RepositionAboutControls(HWND hDlg)
     if (hOkButton)
     {
         int buttonWidth = DpiScale(80, dpi);
-        int buttonHeight = DpiScale(30, dpi);
+        int buttonHeight = DpiScale(24, dpi);
         int newX = (clientWidth - buttonWidth) / 2;
         int newY = clientHeight - buttonHeight - padding;
         //int panelTop = clientHeight - buttonHeight - padding * 2;
@@ -278,16 +270,195 @@ static void RepositionAboutControls(HWND hDlg)
     }
 }
 
+
+typedef struct {
+    HWND hDlg;
+} UPDATE_CHECK_THREAD_DATA;
+
+// Helper function to find a substring in a buffer with a given length
+const char* strnstr(const char* haystack, const char* needle, size_t len) {
+    if (!needle || *needle == '\0') return haystack;
+    size_t needle_len = strlen(needle);
+    if (needle_len == 0 || needle_len > len) return NULL;
+
+    for (size_t i = 0; i <= len - needle_len; ++i) {
+        if (strncmp(&haystack[i], needle, needle_len) == 0) {
+            return &haystack[i];
+        }
+    }
+    return NULL;
+}
+
+DWORD WINAPI CheckForUpdateThreadProc(LPVOID lpParameter) {
+    UPDATE_CHECK_THREAD_DATA* pData = (UPDATE_CHECK_THREAD_DATA*)lpParameter;
+    HWND hDlg = pData->hDlg;
+    free(pData);
+
+    HINTERNET hSession = NULL, hConnect = NULL, hRequest = NULL;
+    BOOL bSuccess = FALSE;
+    wchar_t* pTagName = NULL;
+
+    hSession = WinHttpOpen(L"LanWan/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (hSession) {
+        hConnect = WinHttpConnect(hSession, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    }
+    if (hConnect) {
+        hRequest = WinHttpOpenRequest(hConnect, L"GET", L"/repos/liangshengyong/LanWan/releases/latest", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    }
+    if (hRequest) {
+        const wchar_t* headers = L"User-Agent: LanWan\r\nAccept: application/vnd.github+json";
+        if (WinHttpAddRequestHeaders(hRequest, headers, -1L, WINHTTP_ADDREQ_FLAG_ADD)) {
+            if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+                if (WinHttpReceiveResponse(hRequest, NULL)) {
+                    DWORD dwStatusCode = 0;
+                    DWORD dwSize = sizeof(dwStatusCode);
+                    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &dwStatusCode, &dwSize, NULL);
+
+                    if (dwStatusCode == 200) {
+                        char* buffer = NULL;
+                        DWORD totalSize = 0;
+                        
+                        do {
+                            dwSize = 0;
+                            if (WinHttpQueryDataAvailable(hRequest, &dwSize)) {
+                                if (dwSize > 0) {
+                                    char* new_buffer = (char*)realloc(buffer, totalSize + dwSize);
+                                    if (new_buffer) {
+                                        buffer = new_buffer;
+                                        DWORD downloaded = 0;
+                                        if (WinHttpReadData(hRequest, buffer + totalSize, dwSize, &downloaded)) {
+                                            totalSize += downloaded;
+                                        } else { free(buffer); buffer = NULL; break; }
+                                    } else { free(buffer); buffer = NULL; break; }
+                                }
+                            }
+                        } while (dwSize > 0);
+
+                        if (buffer) {
+                            const char* tag_name_start_key = "\"tag_name\":\"";
+                            const char* tag_name_start = strnstr(buffer, tag_name_start_key, totalSize);
+                            if (tag_name_start) {
+                                tag_name_start += strlen(tag_name_start_key);
+                                const char* tag_name_end = strchr(tag_name_start, '"');
+                                if (tag_name_end) {
+                                    size_t tag_name_len = tag_name_end - tag_name_start;
+                                    int w_tag_name_len = MultiByteToWideChar(CP_UTF8, 0, tag_name_start, tag_name_len, NULL, 0);
+                                    pTagName = (wchar_t*)malloc((w_tag_name_len + 1) * sizeof(wchar_t));
+                                    if (pTagName) {
+                                        MultiByteToWideChar(CP_UTF8, 0, tag_name_start, tag_name_len, pTagName, w_tag_name_len);
+                                        pTagName[w_tag_name_len] = L'\0';
+                                        bSuccess = TRUE;
+                                    }
+                                }
+                            }
+                            free(buffer);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (hRequest) WinHttpCloseHandle(hRequest);
+    if (hConnect) WinHttpCloseHandle(hConnect);
+    if (hSession) WinHttpCloseHandle(hSession);
+
+    if (bSuccess && pTagName) {
+        PostMessage(hDlg, WM_APP_UPDATE_CHECK_SUCCESS, 0, (LPARAM)pTagName);
+    } else {
+        PostMessage(hDlg, WM_APP_UPDATE_CHECK_FAILURE, 0, 0);
+    }
+
+    return 0;
+}
+
+#include <strsafe.h>
+
+// Function to get the application's product version from resources
+BOOL GetAppVersion(wchar_t* version_str, int len)
+{
+    wchar_t module_path[MAX_PATH];
+    if (GetModuleFileNameW(NULL, module_path, MAX_PATH) == 0) {
+        return FALSE;
+    }
+
+    DWORD ver_handle = 0;
+    DWORD ver_info_size = GetFileVersionInfoSizeW(module_path, &ver_handle);
+    if (ver_info_size == 0) {
+        return FALSE;
+    }
+
+    void* ver_data = malloc(ver_info_size);
+    if (!ver_data) {
+        return FALSE;
+    }
+
+    if (!GetFileVersionInfoW(module_path, ver_handle, ver_info_size, ver_data)) {
+        free(ver_data);
+        return FALSE;
+    }
+
+    LPVOID lp_buffer = NULL;
+    UINT pu_len = 0;
+    struct LANGANDCODEPAGE {
+        WORD wLanguage;
+        WORD wCodePage;
+    } *lp_translate;
+
+    if (VerQueryValueW(ver_data, L"\\VarFileInfo\\Translation", (LPVOID*)&lp_translate, &pu_len)) {
+        wchar_t query_str[50];
+        StringCchPrintfW(query_str, 50, L"\\StringFileInfo\\%04x%04x\\ProductVersion",
+            lp_translate[0].wLanguage, lp_translate[0].wCodePage);
+
+        if (VerQueryValueW(ver_data, query_str, &lp_buffer, &pu_len)) {
+            wcsncpy_s(version_str, len, (wchar_t*)lp_buffer, _TRUNCATE);
+            free(ver_data);
+            return TRUE;
+        }
+    }
+
+    free(ver_data);
+    return FALSE;
+}
+
+// Compare two version strings (e.g., "2026.1.1")
+// Returns: >0 if v1 > v2, <0 if v1 < v2, 0 if v1 == v2
+int CompareVersions(const wchar_t* v1, const wchar_t* v2) {
+    int v1_parts[3] = {0};
+    int v2_parts[3] = {0};
+
+    swscanf_s(v1, L"%d.%d.%d", &v1_parts[0], &v1_parts[1], &v1_parts[2]);
+    swscanf_s(v2, L"%d.%d.%d", &v2_parts[0], &v2_parts[1], &v2_parts[2]);
+
+    for (int i = 0; i < 3; i++) {
+        if (v1_parts[i] > v2_parts[i]) return 1;
+        if (v1_parts[i] < v2_parts[i]) return -1;
+    }
+    return 0;
+}
+
 INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
     static UINT s_uCurrentDpi = 96;
     static GpBitmap* gpBitmapQR = NULL;
+    static wchar_t s_currentVersion[32] = {0};
 
     switch (message)
     {
     case WM_INITDIALOG:
         {
             g_hAboutDialog = hDlg; // Store dialog handle
+
+            // Get and store the current app version
+            if (!GetAppVersion(s_currentVersion, ARRAYSIZE(s_currentVersion))) {
+                wcscpy_s(s_currentVersion, ARRAYSIZE(s_currentVersion), L"Unknown");
+            }
+
+            // Set initial text
+            wchar_t initial_text[256];
+            swprintf_s(initial_text, ARRAYSIZE(initial_text), L"版本 %s 正在检查更新...", s_currentVersion);
+            SetDlgItemTextW(hDlg, IDC_ABOUT_VERSION, initial_text);
+
 
             // Get current DPI for the dialog
             s_uCurrentDpi = GetDpiForWindow(hDlg);
@@ -345,11 +516,53 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
             SetWindowPos(hDlg, NULL, iX, iY, scaledWidth, scaledHeight, SWP_NOZORDER);
             
             RepositionAboutControls(hDlg);
-
+            
+        
             InvalidateRect(hDlg, NULL, TRUE);
             UpdateWindow(hDlg);
         }
         return (INT_PTR)TRUE;
+    case WM_SHOWWINDOW:
+        if (wParam == TRUE) // Dialog is being shown
+        {
+            UPDATE_CHECK_THREAD_DATA* pData = (UPDATE_CHECK_THREAD_DATA*)malloc(sizeof(UPDATE_CHECK_THREAD_DATA));
+            if (pData) {
+                pData->hDlg = hDlg;
+                HANDLE hThread = CreateThread(NULL, 0, CheckForUpdateThreadProc, pData, 0, NULL);
+                if (hThread) {
+                    CloseHandle(hThread);
+                } else {
+                    free(pData);
+                    PostMessage(hDlg, WM_APP_UPDATE_CHECK_FAILURE, 0, 0);
+                }
+            } else {
+                 PostMessage(hDlg, WM_APP_UPDATE_CHECK_FAILURE, 0, 0);
+            }
+        }
+        break;
+    case WM_APP_UPDATE_CHECK_SUCCESS:
+        {
+            wchar_t* new_tag = (wchar_t*)lParam;
+            if (new_tag)
+            {
+                wchar_t message[256];
+                if (CompareVersions(new_tag, s_currentVersion) > 0) {
+                    swprintf_s(message, ARRAYSIZE(message), L"版本 %s 发现新版本 <A HREF=\"download\">前往下载</A>", s_currentVersion);
+                } else {
+                    swprintf_s(message, ARRAYSIZE(message), L"版本 %s 已是最新版本", s_currentVersion);
+                }
+                SetDlgItemTextW(hDlg, IDC_ABOUT_VERSION, message);
+                free(new_tag);
+            }
+        }
+        break;
+    case WM_APP_UPDATE_CHECK_FAILURE:
+        {
+            wchar_t message[256];
+            swprintf_s(message, ARRAYSIZE(message), L"版本 %s 检查更新失败", s_currentVersion);
+            SetDlgItemTextW(hDlg, IDC_ABOUT_VERSION, message);
+        }
+        break;
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
         {
@@ -362,6 +575,39 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
             g_hAboutDialog = NULL; // Clear dialog handle
             EndDialog(hDlg, LOWORD(wParam));
             return (INT_PTR)TRUE;
+        }
+        break;
+    case WM_NOTIFY:
+        {
+            LPNMHDR pnmh = (LPNMHDR)lParam;
+            if (pnmh->idFrom == IDC_ABOUT_NAME) {
+                switch (pnmh->code) {
+                    case NM_CLICK:
+                    case NM_RETURN:
+                        {
+                            PNMLINK pNMLink = (PNMLINK)lParam;
+                            if (wcscmp(pNMLink->item.szUrl, L"repository") == 0)
+                            {
+                                ShellExecuteW(NULL, L"open", L"https://github.com/liangshengyong/LanWan", NULL, NULL, SW_SHOWNORMAL);
+                            }
+                        }
+                        break;
+                }
+            }
+            if (pnmh->idFrom == IDC_ABOUT_VERSION) {
+                switch (pnmh->code) {
+                    case NM_CLICK:
+                    case NM_RETURN:
+                        {
+                            PNMLINK pNMLink = (PNMLINK)lParam;
+                            if (wcscmp(pNMLink->item.szUrl, L"download") == 0)
+                            {
+                                ShellExecuteW(NULL, L"open", L"https://github.com/liangshengyong/LanWan/releases/latest", NULL, NULL, SW_SHOWNORMAL);
+                            }
+                        }
+                        break;
+                }
+            }
         }
         break;
     case WM_APP_UPDATE_FONT:
@@ -417,8 +663,8 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
             if (dpi == 0) dpi = 96;
 
             // --- Paint the bottom panel for the button ---
-            int padding = DpiScale(12, dpi);
-            int buttonHeight = DpiScale(30, dpi);
+            int padding = DpiScale(10, dpi);
+            int buttonHeight = DpiScale(24, dpi);
             int clientHeight = rcClient.bottom - rcClient.top;
             
             // Calculate the top Y coordinate of the bottom panel area
@@ -437,12 +683,27 @@ INT_PTR CALLBACK AboutDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM 
                 GpGraphics* graphics = NULL;
                 if (GdipCreateFromHDC(hdc, &graphics) == Ok && graphics)
                 {
-                    int width = DpiScale(200, dpi);
-                    int height = DpiScale(200, dpi);
-                    int x = (rcClient.right - width) / 2;
+                    // Get the x-coordinate of IDC_STATIC_SUPPORT_TEXT
+                    HWND hStaticText = GetDlgItem(hDlg, IDC_STATIC_SUPPORT_TEXT);
+                    int x = 0; // Default if control not found
+                    if (hStaticText)
+                    {
+                        RECT rcStaticTextScreen;
+                        GetWindowRect(hStaticText, &rcStaticTextScreen);
+                        POINT ptStaticTextClient = {rcStaticTextScreen.left, rcStaticTextScreen.top};
+                        ScreenToClient(hDlg, &ptStaticTextClient);
+                        x = ptStaticTextClient.x;
+                    }
+
+                    int initialWidth = DpiScale(200, dpi); // Use an initial width for calculation
+                    int calculatedWidth = rcClient.right - (2 * x);
+                    if (calculatedWidth < 0) calculatedWidth = initialWidth; // Fallback if calculation is negative
+
+                    int width = calculatedWidth;
+                    int height = calculatedWidth; // Assume square for QR code
                     
                     // Calculate Y position to be below the text labels
-                    int textBlockHeight = DpiScale(20, dpi) * 3; // 3 lines of text
+                    int textBlockHeight = DpiScale(20, dpi) * 4; // 3 lines of text
                     int topPadding = DpiScale(10, dpi);
                     int y = topPadding + textBlockHeight + DpiScale(5, dpi);
 
@@ -472,15 +733,16 @@ BOOL g_wasMaximized = FALSE; // Store if the window was maximized
 // Global flag for traverse status
 BOOL g_traverseInProgress = FALSE;
 
+// Global flag to indicate if the "confirm disconnect" dialog is active
+BOOL g_isConfirmDisconnectDialogActive = FALSE;
+
 // Global event and result for traverse connection synchronization
 HANDLE g_hTraverseConnectEvent = NULL;  // Event to signal connection result
 BOOL g_traverseConnectSuccess = FALSE;  // Connection success/failure flag
 
 
 
-typedef struct {
-    HWND hwnd;
-} THREAD_DATA;
+
 
 // 
 // Tray Icon definitions and functions
@@ -512,128 +774,172 @@ void UpdateTrayIcon(BOOL isConnected)
 }
 
 
-// Thread function to download the server list
-DWORD WINAPI DownloadThreadProc(LPVOID lpParameter)
+
+// Data for the master download thread, which manages multiple download workers
+typedef struct {
+    HWND hwnd;
+} MASTER_DOWNLOAD_THREAD_DATA;
+
+// Data for each worker downloader thread
+typedef struct {
+    const wchar_t* url;
+    DOWNLOADED_DATA* pResult;
+    volatile LONG* pSuccessFlag;
+} WORKER_DOWNLOAD_THREAD_DATA;
+
+// Forward declaration for the worker thread
+DWORD WINAPI SingleDownloadThreadProc(LPVOID lpParameter);
+
+// Master thread function to orchestrate downloading from multiple URLs
+DWORD WINAPI MasterDownloadThreadProc(LPVOID lpParameter)
 {
-    THREAD_DATA* pData = (THREAD_DATA*)lpParameter;
-    HWND hwnd = pData->hwnd;
-    free(pData);
+    MASTER_DOWNLOAD_THREAD_DATA* pMasterData = (MASTER_DOWNLOAD_THREAD_DATA*)lpParameter;
+    HWND hwnd = pMasterData->hwnd;
+    free(pMasterData);
 
-    DWORD dwSize = 0;
-    DWORD dwDownloaded = 0;
-    LPSTR pszOutBuffer = NULL;
-    BOOL  bResults = FALSE;
-    HINTERNET hSession = NULL,
-              hConnect = NULL,
-              hRequest = NULL;
+    const wchar_t* urls[] = {
+        L"https://liangshengyong.github.io/LanWan/data/servers.txt",
+        L"https://raw.githubusercontent.com/liangshengyong/LanWan/refs/heads/master/data/servers.txt",
+        L"https://cdn.jsdelivr.net/gh/liangshengyong/LanWan/data/servers.txt"
+    };
+    int numUrls = sizeof(urls) / sizeof(urls[0]);
 
-    // Use WinHttpOpen to obtain a session handle.
-    hSession = WinHttpOpen(L"LanWan Client/1.0",
-                           WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                           WINHTTP_NO_PROXY_NAME,
-                           WINHTTP_NO_PROXY_BYPASS, 0);
+    HANDLE hThreads[ARRAYSIZE(urls)];
+    WORKER_DOWNLOAD_THREAD_DATA workerData[ARRAYSIZE(urls)];
+    DOWNLOADED_DATA result = {0};
+    volatile LONG successFlag = 0;
+    int createdThreads = 0;
 
-    // Specify an HTTP server.
-    if (hSession)
-        hConnect = WinHttpConnect(hSession, L"liangshengyong.github.io",
-                                INTERNET_DEFAULT_HTTPS_PORT, 0);
+    for (int i = 0; i < numUrls; ++i) {
+        workerData[i].url = urls[i];
+        workerData[i].pResult = &result;
+        workerData[i].pSuccessFlag = &successFlag;
 
-    // Create an HTTP request handle.
-    if (hConnect)
-        hRequest = WinHttpOpenRequest(hConnect, L"GET", L"/LanWan/data/servers.txt",
-                                      NULL, WINHTTP_NO_REFERER,
-                                      WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                      WINHTTP_FLAG_SECURE);
-
-    // Send a request.
-    if (hRequest)
-    {
-        WinHttpSetTimeouts(hRequest, 5000, 5000, 5000, 5000);
-        bResults = WinHttpSendRequest(hRequest,
-                                      WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                      WINHTTP_NO_REQUEST_DATA, 0,
-                                      0, 0);
+        HANDLE hThread = CreateThread(NULL, 0, SingleDownloadThreadProc, &workerData[i], 0, NULL);
+        if (hThread) {
+            hThreads[createdThreads++] = hThread;
+        }
     }
 
-    // End the request.
-    if (bResults)
-        bResults = WinHttpReceiveResponse(hRequest, NULL);
+    if (createdThreads > 0) {
+        WaitForMultipleObjects(createdThreads, hThreads, TRUE, INFINITE);
+    }
 
-    // Keep checking for data until there is nothing left.
-    if (bResults)
-    {
-        // Check for HTTP status code.
-        DWORD dwStatusCode = 0;
-        DWORD dwStatusCodeSize = sizeof(dwStatusCode);
-        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-            NULL, &dwStatusCode, &dwStatusCodeSize, NULL);
-        
-        if (dwStatusCode == 200)
-        {
-            LPSTR tempBuffer = NULL;
-            DWORD totalSize = 0;
+    for (int i = 0; i < createdThreads; ++i) {
+        CloseHandle(hThreads[i]);
+    }
 
-            do
-            {
-                dwSize = 0;
-                if (!WinHttpQueryDataAvailable(hRequest, &dwSize))
-                {
-                    free(tempBuffer);
-                    tempBuffer = NULL;
-                    break;
-                }
-
-                if (dwSize > 0)
-                {
-                    LPSTR newBuffer = (LPSTR)realloc(tempBuffer, totalSize + dwSize + 1);
-                    if (newBuffer)
-                    {
-                        tempBuffer = newBuffer;
-                        if (WinHttpReadData(hRequest, (LPVOID)(tempBuffer + totalSize), dwSize, &dwDownloaded))
-                        {
-                            totalSize += dwDownloaded;
-                        } else {
-                            // If reading data fails, treat it as a download failure.
-                            free(tempBuffer);
-                            tempBuffer = NULL;
-                            break;
-                        }
-                    } else {
-                        free(tempBuffer);
-                        tempBuffer = NULL;
-                        break;
-                    }
-                }
-            } while (dwSize > 0);
-
-            if (tempBuffer) {
-                tempBuffer[totalSize] = '\0'; // Null-terminate the buffer
-                DOWNLOADED_DATA* pData = (DOWNLOADED_DATA*)malloc(sizeof(DOWNLOADED_DATA));
-                if (pData) {
-                    pData->buffer = tempBuffer;
-                    pData->size = totalSize;
-                    PostMessage(hwnd, WM_DOWNLOAD_SUCCESS, 0, (LPARAM)pData);
-                } else {
-                    free(tempBuffer);
-                    PostMessage(hwnd, WM_DOWNLOAD_FAILURE, 0, 0);
-                }
-            } else {
-                PostMessage(hwnd, WM_DOWNLOAD_FAILURE, 0, 0);
-            }
+    if (successFlag == 1 && result.buffer) {
+        DOWNLOADED_DATA* pMsgData = (DOWNLOADED_DATA*)malloc(sizeof(DOWNLOADED_DATA));
+        if (pMsgData) {
+            *pMsgData = result;
+            PostMessage(hwnd, WM_DOWNLOAD_SUCCESS, 0, (LPARAM)pMsgData);
         } else {
+            free(result.buffer); // Avoid memory leak
             PostMessage(hwnd, WM_DOWNLOAD_FAILURE, 0, 0);
         }
     } else {
         PostMessage(hwnd, WM_DOWNLOAD_FAILURE, 0, 0);
     }
 
+    return 0;
+}
 
-    // Close any open handles.
+// Worker thread function to download from a single URL
+DWORD WINAPI SingleDownloadThreadProc(LPVOID lpParameter)
+{
+    WORKER_DOWNLOAD_THREAD_DATA* pData = (WORKER_DOWNLOAD_THREAD_DATA*)lpParameter;
+    if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) {
+        return 0;
+    }
+
+    HINTERNET hSession = NULL, hConnect = NULL, hRequest = NULL;
+    BOOL bResults = FALSE;
+    LPSTR tempBuffer = NULL;
+    DWORD totalSize = 0;
+
+    URL_COMPONENTSW urlComps;
+    wchar_t szHostName[256];
+    wchar_t szUrlPath[2048];
+    ZeroMemory(&urlComps, sizeof(urlComps));
+    urlComps.dwStructSize = sizeof(urlComps);
+    urlComps.lpszHostName = szHostName;
+    urlComps.dwHostNameLength = ARRAYSIZE(szHostName);
+    urlComps.lpszUrlPath = szUrlPath;
+    urlComps.dwUrlPathLength = ARRAYSIZE(szUrlPath);
+
+    if (!WinHttpCrackUrl(pData->url, 0, 0, &urlComps)) {
+        return 1;
+    }
+
+    hSession = WinHttpOpen(L"LanWan Client/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return 1;
+
+    if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) { WinHttpCloseHandle(hSession); return 0; }
+
+    hConnect = WinHttpConnect(hSession, szHostName, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return 1; }
+
+    if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return 0; }
+
+    hRequest = WinHttpOpenRequest(hConnect, L"GET", szUrlPath, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return 1; }
+
+    WinHttpSetTimeouts(hRequest, 5000, 5000, 5000, 5000);
+    
+    if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) { WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return 0; }
+    
+    bResults = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+
+    if (bResults) {
+        bResults = WinHttpReceiveResponse(hRequest, NULL);
+    }
+    
+    if (bResults) {
+        DWORD dwStatusCode = 0;
+        DWORD dwStatusCodeSize = sizeof(dwStatusCode);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &dwStatusCode, &dwStatusCodeSize, NULL);
+
+        if (dwStatusCode == 200) {
+            DWORD dwSize = 0;
+            DWORD dwDownloaded = 0;
+            do {
+                if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) { free(tempBuffer); bResults = FALSE; break; }
+                
+                if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) { bResults = FALSE; break; }
+
+                if (dwSize > 0) {
+                    LPSTR newBuffer = (LPSTR)realloc(tempBuffer, totalSize + dwSize + 1);
+                    if (newBuffer) {
+                        tempBuffer = newBuffer;
+                        if (WinHttpReadData(hRequest, (LPVOID)(tempBuffer + totalSize), dwSize, &dwDownloaded)) {
+                            totalSize += dwDownloaded;
+                        } else { bResults = FALSE; break; }
+                    } else { bResults = FALSE; break; }
+                }
+            } while (dwSize > 0);
+
+            if (bResults) {
+                tempBuffer[totalSize] = '\0';
+                if (InterlockedCompareExchange(pData->pSuccessFlag, 1, 0) == 0) {
+                    pData->pResult->buffer = tempBuffer;
+                    pData->pResult->size = totalSize;
+                } else {
+                    free(tempBuffer);
+                }
+            } else {
+                free(tempBuffer);
+            }
+        } else {
+            bResults = FALSE;
+        }
+    }
+
     if (hRequest) WinHttpCloseHandle(hRequest);
     if (hConnect) WinHttpCloseHandle(hConnect);
     if (hSession) WinHttpCloseHandle(hSession);
 
-    return 0;
+    return bResults ? 0 : 1;
 }
 
 
@@ -664,8 +970,12 @@ void RemoveTrayIcon(HWND hwnd)
 HRESULT ShowTaskDialog(HWND hwnd, const WCHAR* title, const WCHAR* mainInstruction, const WCHAR* content, TASKDIALOG_COMMON_BUTTON_FLAGS buttons, PCWSTR pszIcon, int* pnButton)
 {
     TASKDIALOGCONFIG tdc = { sizeof(tdc) };
-    tdc.hwndParent = hwnd;
-    tdc.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW;
+    if (IsIconic(hwnd)) {
+        tdc.hwndParent = g_hMenuOwnerWnd;
+    } else {
+        tdc.hwndParent = hwnd;
+        tdc.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW;
+    }
     tdc.pszWindowTitle = title;
     tdc.pszMainInstruction = mainInstruction;
     tdc.pszContent = content;
@@ -683,7 +993,21 @@ void ShowTrayContextMenu(HWND hwnd)
 
     HMENU hPopupMenu = CreatePopupMenu();
     InsertMenuW(hPopupMenu, 0, MF_BYPOSITION | MF_STRING | MF_DEFAULT, ID_TRAY_RESTORE, L"显示主窗口");
-    InsertMenuW(hPopupMenu, 1, MF_BYPOSITION | MF_STRING, ID_TRAY_CONNECT, L"顺序连接");
+    InsertMenuW(hPopupMenu, 1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
+    
+    // Get list box item count from the main window
+    HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
+    LRESULT itemCount = 0;
+    if (hListBox) {
+        itemCount = SendMessageW(hListBox, LB_GETCOUNT, 0, 0);
+    }
+
+    // Determine the state for "顺序连接" based on traverse status and item count
+    UINT connectFlags = MF_BYPOSITION | MF_STRING;
+    if (g_traverseInProgress || itemCount <= 0) {
+        connectFlags |= MF_GRAYED;
+    }
+    InsertMenuW(hPopupMenu, 2, connectFlags, ID_TRAY_CONNECT, L"顺序连接");
 
     // Check connection status to enable/disable "Disconnect"
     BOOL isConnected = FALSE;
@@ -693,7 +1017,7 @@ void ShowTrayContextMenu(HWND hwnd)
     conn[0].dwSize = sizeof(RASCONNW);
     if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
         for (DWORD i = 0; i < numConn; i++) {
-            if (wcscmp(conn[i].szEntryName, L"蓝湾网络") == 0) {
+            if (wcscmp(conn[i].szEntryName, L"蓝湾") == 0) {
                 isConnected = TRUE;
                 break;
             }
@@ -704,9 +1028,9 @@ void ShowTrayContextMenu(HWND hwnd)
     if (!isConnected) {
         disconnectFlags |= MF_GRAYED;
     }
-    InsertMenuW(hPopupMenu, 2, disconnectFlags, ID_TRAY_DISCONNECT, L"断开");
-
-    InsertMenuW(hPopupMenu, 3, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"退出");
+    InsertMenuW(hPopupMenu, 3, disconnectFlags, ID_TRAY_DISCONNECT, L"断开");
+    InsertMenuW(hPopupMenu, 4, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
+    InsertMenuW(hPopupMenu, 5, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"退出");
 
     POINT pt;
     GetCursorPos(&pt);
@@ -746,12 +1070,41 @@ void ShowTrayContextMenu(HWND hwnd)
     }
 }
 
+// Global variable for the user-specific phonebook path
+WCHAR g_phonebookPath[MAX_PATH] = {0};
+
+BOOL InitializePhonebookPath()
+{
+    if (g_phonebookPath[0] != L'\0') return TRUE;
+
+    PWSTR pszPath = NULL;
+    HRESULT hr = SHGetKnownFolderPath(&FOLDERID_RoamingAppData, 0, NULL, &pszPath);
+
+    if (SUCCEEDED(hr))
+    {
+        swprintf_s(g_phonebookPath, MAX_PATH, L"%s\\Microsoft\\Network\\Connections\\Pbk\\rasphone.pbk", pszPath);
+        CoTaskMemFree(pszPath);
+
+        // Ensure the directory structure exists before trying to write the phonebook file.
+        WCHAR dir[MAX_PATH];
+        wcscpy_s(dir, MAX_PATH, g_phonebookPath);
+        WCHAR* last_slash = wcsrchr(dir, L'\\');
+        if (last_slash)
+        {
+            *last_slash = L'\0';
+            SHCreateDirectoryExW(NULL, dir, NULL);
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
 BOOL VpnEntryExists()
 {
     RASENTRYW entry = {0};
     entry.dwSize = sizeof(RASENTRYW);
     DWORD dwEntrySize = sizeof(entry);
-    DWORD rasResult = RasGetEntryPropertiesW(NULL, L"蓝湾网络", &entry, &dwEntrySize, NULL, NULL);
+    DWORD rasResult = RasGetEntryPropertiesW(g_phonebookPath, L"蓝湾", &entry, &dwEntrySize, NULL, NULL);
     return (rasResult == SUCCESS);
 }
 
@@ -763,7 +1116,7 @@ BOOL CreateVpnEntry()
     DWORD dwEntrySize = sizeof(entry);
 
     // --- Create Entry ---
-    RasGetEntryPropertiesW(NULL, NULL, &entry, &dwEntrySize, NULL, NULL);
+    RasGetEntryPropertiesW(g_phonebookPath, L"", &entry, &dwEntrySize, NULL, NULL);
     
     entry.dwfNetProtocols = RASNP_Ip | RASNP_Ipv6;
     entry.dwfOptions |= RASEO_RemoteDefaultGateway;
@@ -781,7 +1134,7 @@ BOOL CreateVpnEntry()
     wcscpy_s(entry.szDeviceName, RAS_MaxDeviceName + 1, L"L2TP");
     wcscpy_s(entry.szLocalPhoneNumber, RAS_MaxPhoneNumber + 1, L"");
 
-    rasResult = RasSetEntryPropertiesW(NULL, L"蓝湾网络", &entry, entry.dwSize, NULL, 0);
+    rasResult = RasSetEntryPropertiesW(g_phonebookPath, L"蓝湾", &entry, entry.dwSize, NULL, 0);
     if (rasResult != SUCCESS) {
         return FALSE;
     }
@@ -792,19 +1145,7 @@ BOOL CreateVpnEntry()
     pskCreds.dwMask = RASCM_PreSharedKey;
     wcscpy_s(pskCreds.szPassword, PWLEN + 1, L"vpn");
 
-    rasResult = RasSetCredentialsW(NULL, L"蓝湾网络", &pskCreds, FALSE);
-    if (rasResult != SUCCESS) {
-        return FALSE;
-    }
-
-    // --- Set User Credentials ---
-    RASCREDENTIALSW userCreds = {0};
-    userCreds.dwSize = sizeof(RASCREDENTIALSW);
-    userCreds.dwMask = RASCM_UserName | RASCM_Password;
-    wcscpy_s(userCreds.szUserName, UNLEN + 1, L"vpn");
-    wcscpy_s(userCreds.szPassword, PWLEN + 1, L"vpn");
-
-    rasResult = RasSetCredentialsW(NULL, L"蓝湾网络", &userCreds, FALSE);
+    rasResult = RasSetCredentialsW(g_phonebookPath, L"蓝湾", &pskCreds, FALSE);
     if (rasResult != SUCCESS) {
         return FALSE;
     }
@@ -822,7 +1163,7 @@ void DisconnectOnExit()
 
     if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
         for (DWORD i = 0; i < numConn; i++) {
-            if (wcscmp(conn[i].szEntryName, L"蓝湾网络") == 0) {
+            if (wcscmp(conn[i].szEntryName, L"蓝湾") == 0) {
                 RasHangUpW(conn[i].hrasconn);
                 // Initiated hangup. The process will exit, and the OS will clean up the connection.
                 // No need to wait here, which avoids blocking the exit process.
@@ -841,6 +1182,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     const wchar_t HELPER_CLASS_NAME[] = L"LanWanMenuHelper";
     const wchar_t MUTEX_NAME[] = L"Global\\LanWanApp_{E1F495A0-69A7-4A8A-9963-4C78A3A585A1}";
     const wchar_t CREATE_VPN_ARG[] = L"init";
+
+    if (!InitializePhonebookPath())
+    {
+        MessageBoxW(NULL, L"错误：无法获取用户电话簿路径。", L"初始化失败", MB_OK | MB_ICONERROR);
+        return 1;
+    }
 
     // If called with init, create the entry and exit.
     if (wcscmp(lpCmdLine, CREATE_VPN_ARG) == 0)
@@ -1116,6 +1463,7 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
         }
         g_hRasConn = NULL; // Clear global handle on failure
         g_currentConnectingServerIp[0] = L'\0'; // Clear global IP
+        g_connectedIp[0] = L'\0'; // Clear connected IP on failure
         return;
     }
 
@@ -1137,6 +1485,10 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
             swprintf_s(statusText, sizeof(statusText)/sizeof(wchar_t), L"已连接到 %s", g_currentConnectingServerIp);
             SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)statusText);
             UpdateTrayIcon(TRUE);
+
+            // Store the successfully connected IP
+            wcscpy_s(g_connectedIp, ARRAYSIZE(g_connectedIp), g_currentConnectingServerIp);
+
             // If traverse is in progress, signal success
             if (g_traverseInProgress && g_hTraverseConnectEvent) {
                 g_traverseConnectSuccess = TRUE;
@@ -1150,6 +1502,7 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
         case RASCS_Disconnected: 
             SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"连接已断开");
             UpdateTrayIcon(FALSE);
+            g_connectedIp[0] = L'\0'; // Clear connected IP on disconnect
             // If traverse is in progress and waiting, signal failure if not yet succeeded
             if (g_traverseInProgress && g_hTraverseConnectEvent && !g_traverseConnectSuccess) {
                 SetEvent(g_hTraverseConnectEvent);
@@ -1189,7 +1542,7 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
 
     if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
         for (DWORD i = 0; i < numConn; i++) {
-            if (wcscmp(conn[i].szEntryName, L"蓝湾网络") == 0) {
+            if (wcscmp(conn[i].szEntryName, L"蓝湾") == 0) {
                 statusMsg = _wcsdup(L"检测到现有连接，正在断开...");
                 if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
 
@@ -1237,7 +1590,7 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     DWORD dwEntrySize = sizeof(entry);
     
     // Get the existing properties for "蓝湾网络"
-    rasResult = RasGetEntryPropertiesW(NULL, L"蓝湾网络", &entry, &dwEntrySize, NULL, NULL);
+    rasResult = RasGetEntryPropertiesW(g_phonebookPath, L"蓝湾", &entry, &dwEntrySize, NULL, NULL);
     if (rasResult != SUCCESS)
     {
         statusMsg = _wcsdup(L"错误：找不到 '蓝湾网络' 条目，无法连接。");
@@ -1249,7 +1602,7 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     wcscpy_s(entry.szLocalPhoneNumber, RAS_MaxPhoneNumber + 1, serverIp);
 
     // Set the updated properties
-    rasResult = RasSetEntryPropertiesW(NULL, L"蓝湾网络", &entry, entry.dwSize, NULL, 0);
+    rasResult = RasSetEntryPropertiesW(g_phonebookPath, L"蓝湾", &entry, entry.dwSize, NULL, 0);
     if (rasResult != SUCCESS)
     {
         statusMsg = _wcsdup(L"更新服务器地址失败。");
@@ -1269,7 +1622,7 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     if (RasEnumConnectionsW(conn_check, &conn_check_size, &conn_count) == SUCCESS && conn_count > 0)
     {
         for (DWORD i = 0; i < conn_count; i++) {
-            if (wcscmp(conn_check[i].szEntryName, L"蓝湾网络") == 0) {
+            if (wcscmp(conn_check[i].szEntryName, L"蓝湾") == 0) {
                 // A connection still exists, so we should not dial.
                 statusMsg = _wcsdup(L"拨号失败：一个同名连接已处于活动状态。");
                 if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
@@ -1280,15 +1633,15 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     
     RASDIALPARAMSW rasDialParams = {0};
     rasDialParams.dwSize = sizeof(RASDIALPARAMSW);
-    wcscpy_s(rasDialParams.szEntryName, RAS_MaxEntryName + 1, L"蓝湾网络");
-    // Supply credentials directly to the dialer for robustness, even though they are saved.
+    wcscpy_s(rasDialParams.szEntryName, RAS_MaxEntryName + 1, L"蓝湾");
+    // Supply credentials directly to the dialer for robustness.
     wcscpy_s(rasDialParams.szUserName, UNLEN + 1, L"vpn");
     wcscpy_s(rasDialParams.szPassword, PWLEN + 1, L"vpn");
     
     wcscpy_s(g_currentConnectingServerIp, ARRAYSIZE(g_currentConnectingServerIp), serverIp); // Store in global variable
 
     g_hRasConn = NULL; 
-    rasResult = RasDialW(NULL, NULL, &rasDialParams, 0, (RasDialFunc)RasDialCallback, &g_hRasConn); // No dwCallbackData needed
+    rasResult = RasDialW(NULL, g_phonebookPath, &rasDialParams, 0, (RasDialFunc)RasDialCallback, &g_hRasConn); // No dwCallbackData needed
 
     if (rasResult == 0 || rasResult == ERROR_IO_PENDING)
     {
@@ -1301,7 +1654,7 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
         if (rasResult == ERROR_ALREADY_DIALING) // 801
         {
             wchar_t cmd[256];
-            swprintf_s(cmd, ARRAYSIZE(cmd), L"rasdial \"%s\" /disconnect", L"蓝湾网络");
+            swprintf_s(cmd, ARRAYSIZE(cmd), L"rasdial \"%s\" /disconnect", L"蓝湾");
 
             wchar_t* hangupMsg = _wcsdup(L"连接似乎已拨或卡住，正在尝试强制断开...");
             if(hangupMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)hangupMsg);
@@ -1334,22 +1687,32 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     return 0;
 }
 
-// Helper function to update traverse button state based on list box content
-void UpdateTraverseButtonState(HWND hwnd)
+// Helper function to update all relevant UI button states
+void UpdateUiButtonStates(HWND hwnd)
 {
     HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
     HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
-    
-    if (!hListBox || !hTraverseButton) return; 
-    
-    // Get item count from list box
+    HWND hRefreshButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH); // Get refresh button handle
+
+    if (!hListBox || !hTraverseButton || !hRefreshButton) return;
+
     LRESULT itemCount = SendMessageW(hListBox, LB_GETCOUNT, 0, 0);
-    
-    // Enable button only if there are items
-    if (itemCount > 0) {
-        EnableWindow(hTraverseButton, TRUE);
-    } else {
+
+    // Logic for IDC_BUTTON_CONNECT (Traverse button)
+    // Disabled if traverse is in progress OR list is empty.
+    if (g_traverseInProgress || itemCount <= 0) {
         EnableWindow(hTraverseButton, FALSE);
+    } else {
+        EnableWindow(hTraverseButton, TRUE);
+    }
+
+    // Logic for IDC_BUTTON_REFRESH (Refresh button)
+    // Disabled if traverse is in progress.
+    // Otherwise, it should be enabled by default. Its own download process will temporarily disable it.
+    if (g_traverseInProgress) {
+        EnableWindow(hRefreshButton, FALSE);
+    } else {
+        EnableWindow(hRefreshButton, TRUE);
     }
 }
 
@@ -1459,7 +1822,16 @@ DWORD WINAPI TraverseConnectionThreadProc(LPVOID lpParameter)
         if (waitResult == WAIT_OBJECT_0 && g_traverseConnectSuccess) {
             // Connection was successful, break the loop and keep the connection.
             connectionSuccess = TRUE;
+        } else if (waitResult == WAIT_TIMEOUT) {
+            // If the connection attempt times out, we must explicitly hang up before proceeding.
+            if (g_hRasConn != NULL) {
+                RasHangUpW(g_hRasConn);
+                // Wait for the hang up to complete. The callback will signal g_hTraverseConnectEvent on disconnection.
+                WaitForSingleObject(g_hTraverseConnectEvent, 5000); // 5-second timeout for hangup.
+            }
         }
+        // If waitResult is WAIT_OBJECT_0 and g_traverseConnectSuccess is FALSE, it means the connection failed quickly.
+        // In that case, we just loop to the next server.
 
         free(buffer);
     }
@@ -1505,8 +1877,12 @@ BOOL EnsureVpnEntryExists(HWND hwnd)
     };
 
     TASKDIALOGCONFIG tdc = { sizeof(tdc) };
-    tdc.hwndParent = hwnd; // Use main window as parent
-    tdc.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW;
+    if (IsIconic(hwnd)) {
+        tdc.hwndParent = g_hMenuOwnerWnd;
+    } else {
+        tdc.hwndParent = hwnd;
+        tdc.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW;
+    }
     tdc.pButtons = aCustomButtons;
     tdc.cButtons = ARRAYSIZE(aCustomButtons);
     tdc.nDefaultButton = 1002;
@@ -1557,6 +1933,11 @@ BOOL EnsureVpnEntryExists(HWND hwnd)
 // Helper function to check for an active connection and ask the user to disconnect
 BOOL CheckAndConfirmDisconnect(HWND hwnd)
 {
+    // If the dialog is already active, prevent showing another one
+    if (g_isConfirmDisconnectDialogActive) {
+        return FALSE;
+    }
+
     // Check if a connection is already active
     BOOL isConnected = FALSE;
     RASCONNW conn[1];
@@ -1566,7 +1947,7 @@ BOOL CheckAndConfirmDisconnect(HWND hwnd)
 
     if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
         for (DWORD i = 0; i < numConn; i++) {
-            if (wcscmp(conn[i].szEntryName, L"蓝湾网络") == 0) {
+            if (wcscmp(conn[i].szEntryName, L"蓝湾") == 0) {
                 isConnected = TRUE;
                 break;
             }
@@ -1580,8 +1961,12 @@ BOOL CheckAndConfirmDisconnect(HWND hwnd)
         };
 
         TASKDIALOGCONFIG tdc = { sizeof(tdc) };
-        tdc.hwndParent = hwnd;
-        tdc.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW;
+        if (IsIconic(hwnd)) {
+            tdc.hwndParent = g_hMenuOwnerWnd;
+        } else {
+            tdc.hwndParent = hwnd;
+            tdc.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW;
+        }
         tdc.pButtons = aCustomButtons;
         tdc.cButtons = ARRAYSIZE(aCustomButtons);
         tdc.nDefaultButton = 1002; // Default to Cancel
@@ -1590,8 +1975,12 @@ BOOL CheckAndConfirmDisconnect(HWND hwnd)
         tdc.pszMainInstruction = L"该操作将断开当前的连接。";
         tdc.pszContent = L"是否继续？";
 
+        // Set flag before showing the dialog
+        g_isConfirmDisconnectDialogActive = TRUE;
         int nClickedButton = 0;
         HRESULT hr = TaskDialogIndirect(&tdc, &nClickedButton, NULL, NULL);
+        // Reset flag after the dialog is closed
+        g_isConfirmDisconnectDialogActive = FALSE;
 
         if (SUCCEEDED(hr) && nClickedButton == 1001) {
             return TRUE; // Continue was clicked
@@ -1669,12 +2058,13 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
             SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)L"14.132.22.67");
             SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)L"1.66.33.164");
+            SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)L"219.100.37.1");
 
             // Update status bar for the default entry
-            SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"2 台服务器");
+            SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"3 台服务器");
             SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"就绪");
             
-            UpdateTraverseButtonState(hwnd);
+            UpdateUiButtonStates(hwnd);
             AddTrayIcon(hwnd);
 
             // Perform initial layout to avoid flicker on startup
@@ -1785,14 +2175,21 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                                     break;
                                 }
                             }
-                            free(buffer);
 
                             if (!isBlank)
                             {
                                 SendMessageW(hListBox, LB_SETCURSEL, item_index, 0);
                                 
                                 HMENU hPopupMenu = CreatePopupMenu();
-                                InsertMenuW(hPopupMenu, 0, MF_BYPOSITION | MF_STRING | MF_DEFAULT, ID_LISTBOX_CONNECT, L"连接");
+                                // If the selected IP is the one currently connected, show "Disconnect".
+                                if (g_connectedIp[0] != L'\0' && wcscmp(buffer, g_connectedIp) == 0)
+                                {
+                                    InsertMenuW(hPopupMenu, 0, MF_BYPOSITION | MF_STRING | MF_DEFAULT, ID_LISTBOX_DISCONNECT, L"断开");
+                                }
+                                else // Otherwise, show "Connect".
+                                {
+                                    InsertMenuW(hPopupMenu, 0, MF_BYPOSITION | MF_STRING | MF_DEFAULT, ID_LISTBOX_CONNECT, L"连接");
+                                }
                                 InsertMenuW(hPopupMenu, 1, MF_BYPOSITION | MF_STRING, ID_LISTBOX_COPY, L"复制");
 
                                 SetForegroundWindow(hwnd);
@@ -1804,6 +2201,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                                     PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(command, 0), 0);
                                 }
                             }
+                            free(buffer);
                         }
                     }
                 }
@@ -1872,20 +2270,30 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 {
                     HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
                     EnableWindow(hButton, FALSE);
+                    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
+                    EnableWindow(hTraverseButton, FALSE);
                     SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"正在刷新...");
 
-                    THREAD_DATA* pData = (THREAD_DATA*)malloc(sizeof(THREAD_DATA));
+                    MASTER_DOWNLOAD_THREAD_DATA* pData = (MASTER_DOWNLOAD_THREAD_DATA*)malloc(sizeof(MASTER_DOWNLOAD_THREAD_DATA));
                     if (pData)
                     {
                         pData->hwnd = hwnd;
-                        HANDLE hThread = CreateThread(NULL, 0, DownloadThreadProc, pData, 0, NULL);
+                        HANDLE hThread = CreateThread(NULL, 0, MasterDownloadThreadProc, pData, 0, NULL);
                         if (hThread)
                         {
                             CloseHandle(hThread);
                         }
+                        else
+                        {
+                            free(pData);
+                            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"无法创建线程");
+                            EnableWindow(hButton, TRUE);
+                            UpdateUiButtonStates(hwnd);
+                        }
                     } else {
                         SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"内存分配失败");
                         EnableWindow(hButton, TRUE);
+                        UpdateUiButtonStates(hwnd);
                     }
                     break;
                 }
@@ -1903,11 +2311,10 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         break; // User chose not to continue
                     }
 
-                    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
-                    EnableWindow(hTraverseButton, FALSE);
                     SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"开始顺序连接...");
 
                     g_traverseInProgress = TRUE;
+                    UpdateUiButtonStates(hwnd);
 
                     TRAVERSE_THREAD_DATA* pData = (TRAVERSE_THREAD_DATA*)malloc(sizeof(TRAVERSE_THREAD_DATA));
                     if (pData)
@@ -1921,15 +2328,15 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         else
                         {
                             free(pData);
-                            EnableWindow(hTraverseButton, TRUE);
-                            g_traverseInProgress = FALSE;
+                            g_traverseInProgress = FALSE; // Set flag first
+                            UpdateUiButtonStates(hwnd); // Then update UI
                             SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"无法创建顺序连接线程");
                         }
                     }
-                    else
+                    else // This is also a problematic else block
                     {
-                        EnableWindow(hTraverseButton, TRUE);
-                        g_traverseInProgress = FALSE;
+                        g_traverseInProgress = FALSE; // Set flag first
+                        UpdateUiButtonStates(hwnd); // Then update UI
                         SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"内存分配失败");
                     }
                     break;
@@ -1954,6 +2361,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 case ID_TRAY_EXIT:
                     DestroyWindow(hwnd);
                     break;
+                case ID_LISTBOX_DISCONNECT:
                 case ID_TRAY_DISCONNECT:
                     {
                         RASCONNW conn[10];
@@ -1963,7 +2371,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
                         if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
                             for (DWORD i = 0; i < numConn; i++) {
-                                if (wcscmp(conn[i].szEntryName, L"蓝湾网络") == 0) {
+                                if (wcscmp(conn[i].szEntryName, L"蓝湾") == 0) {
                                     RasHangUpW(conn[i].hrasconn);
                                     break;
                                 }
@@ -1973,6 +2381,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         // Update UI immediately after initiating hangup.
                         SendMessageW(GetDlgItem(hwnd, IDC_STATUSBAR), SB_SETTEXTW, 1, (LPARAM)L"连接已断开");
                         UpdateTrayIcon(FALSE);
+                        g_connectedIp[0] = L'\0'; // Immediately clear the connected IP
                     }
                     break;
                 // "测试" menu and test button removed
@@ -1980,10 +2389,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     {
                         if (!EnsureVpnEntryExists(hwnd)) break;
 
-                        if (!CheckAndConfirmDisconnect(hwnd)) break;
-                        
                         HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
-                        int index = (int)SendMessageW(hListBox, LB_GETCURSEL, 0, 0);
+                        int index = (int)SendMessageW(hListBox, LB_GETCURSEL, 0, 0); // Already selected by right-click
                         if (index != LB_ERR)
                         {
                             int len = (int)SendMessageW(hListBox, LB_GETTEXTLEN, index, 0);
@@ -1993,10 +2400,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                                 if (buffer)
                                 {
                                     SendMessageW(hListBox, LB_GETTEXT, index, (LPARAM)buffer);
-                                    
-                                    // Call the VPN connection function
-                                    ConnectVpn(hwnd, buffer);
-
+                                    // As per user request, "confirm disconnect" dialog is not shown for single connect from listbox.
+                                    ConnectVpn(hwnd, buffer); 
                                     free(buffer);
                                 }
                             }
@@ -2135,8 +2540,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         
         EnableWindow(hButton, TRUE);
         
-        // Update traverse button state based on list content
-        UpdateTraverseButtonState(hwnd);
+        UpdateUiButtonStates(hwnd);
         break;
     }
 
@@ -2146,8 +2550,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
         SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"刷新失败");
         EnableWindow(hButton, TRUE);
-        // 如果列表框中仍有数据，则允许用户点击“依次连接”
-        UpdateTraverseButtonState(hwnd);
+        // 如果列表框中仍有数据，则允许用户点击“顺序连接”
+        UpdateUiButtonStates(hwnd);
         break;
     }
 
@@ -2163,14 +2567,11 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_TRAVERSE_COMPLETE:
-    {
-        // Re-enable the traverse button when the traversal completes
-        HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
-        if (hTraverseButton) {
-            EnableWindow(hTraverseButton, TRUE);
+        {
+            g_traverseInProgress = FALSE;
+            UpdateUiButtonStates(hwnd);
+            break;
         }
-        break;
-    }
 
     // IKE probe messages removed
 

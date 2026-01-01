@@ -4,7 +4,7 @@
         {
             "label": "Build with Modern Style",
             "type": "shell",
-            "command": "windres.exe -i main.rc -O coff -o main.res; gcc.exe -g main.c main.res -o main.exe -lcomctl32 -lwinhttp -lgdiplus -lgdi32 -lrasapi32 -lws2_32 -lole32 -lwindowscodecs -mwindows -municode",
+            "command": "windres.exe -i main.rc -O coff -o main.res; gcc.exe -g main.c main.res -o main.exe -lversion -lcomctl32 -lwinhttp -lgdiplus -lgdi32 -lrasapi32 -lws2_32 -lole32 -lwindowscodecs -mwindows -municode",
             "group": {
                 "kind": "build",
                 "isDefault": true

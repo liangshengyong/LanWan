@@ -1,6 +1,6 @@
-﻿#pragma code_page(65001)
+#pragma code_page(65001)
 #include "resource.h"
-#include "winuser.h"
+#include <windows.h>
 
 MAINICON_ID ICON "lanwan.ico"
 TRAYICON_ID ICON "tray.ico"
@@ -22,8 +22,8 @@ STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_CLIPCHILDREN | WS_SYSMENU | WS_
 CAPTION "关于"
 BEGIN
     ICON            MAINICON_ID,IDC_ABOUT_ICON,8,8,32,32,SS_ICON
-    LTEXT           "蓝湾 版本 2026.1.1",IDC_ABOUT_VERSION,32,8,135,18
-    LTEXT           "一个 L2TP/IPsec 服务器测试程序",IDC_ABOUT_DESC,32,28,135,18
+    CONTROL         "蓝湾 <A HREF=""repository"">项目仓库</A>",IDC_ABOUT_NAME,"SysLink",WS_CHILD | WS_VISIBLE,32,8,135,18
+    CONTROL         "版本信息",IDC_ABOUT_VERSION,"SysLink",WS_CHILD | WS_VISIBLE,32,28,135,18
     LTEXT           "支持作者",IDC_STATIC_SUPPORT_TEXT,32,48,135,18
     DEFPUSHBUTTON   "确定",IDOK,64,180,58,14
 END
@@ -37,4 +37,27 @@ BEGIN
     LISTBOX         IDC_LISTBOX,7,7,226,186,LBS_STANDARD | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP
     DEFPUSHBUTTON   "刷新列表",IDC_BUTTON_REFRESH,239,7,54,14
     PUSHBUTTON      "顺序连接",IDC_BUTTON_CONNECT,239,28,54,14
+END
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "FileDescription", "蓝湾是一个 L2TP/IPsec 服务器测试程序"
+            VALUE "ProductName", "蓝湾"
+            VALUE "ProductVersion", "2026.1.1"
+			VALUE "LegalCopyright", "© 2026 梁升勇"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
 END
