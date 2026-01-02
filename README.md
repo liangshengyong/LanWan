@@ -4,13 +4,13 @@
 
 ---
 
-## 🖥️ 屏幕截图
+## 屏幕截图
 
 ![screenshot](docs/screenshot.png)
 
 ---
 
-## 🚀 使用方法
+## 使用方法
 
 点击 [这里](https://github.com/liangshengyong/LanWan/releases/latest) 下载最新版本
 1. 压缩包解压后，点击“蓝湾.exe”启动程序
@@ -23,14 +23,14 @@
 
 ---
 
-## ⚠️ 注意事项
+## 注意事项
 
 - 本程序由 AI 生成，作者不对使用后果承担责任
 - 本程序仅用于学习和技术研究，请遵守当地法律法规
 
 ---
 
-## 📄 许可证
+## 许可证
 
 Source code is licensed under the **MIT License**.
 
