@@ -34,8 +34,5 @@
 
 ## 许可证
 
-Source code is licensed under the **MIT License**.
-
-Prebuilt binaries are provided for convenience, **without any warranty**.
-
-See the [LICENSE](LICENSE) file for details.
+- Source code is licensed under the **MIT License**
+- Prebuilt binaries are provided for convenience, **without any warranty**
