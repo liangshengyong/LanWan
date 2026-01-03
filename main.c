@@ -904,7 +904,7 @@ DWORD WINAPI SingleDownloadThreadProc(LPVOID lpParameter)
             DWORD dwSize = 0;
             DWORD dwDownloaded = 0;
             do {
-                if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) { free(tempBuffer); bResults = FALSE; break; }
+                if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) { bResults = FALSE; break; }
                 
                 if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) { bResults = FALSE; break; }
 
@@ -2455,15 +2455,6 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         char* pszData = pData->buffer;
         DWORD dataSize = pData->size;
 
-        // For debugging, save the downloaded content to a file
-        HANDLE hFile = CreateFileW(L"C:\\Users\\梁升勇\\.gemini\\tmp\\975576e5cca9abbc0f489763bdeb291d493e2087a4bf097ae4d7b208579f88a4\\download_content.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile != INVALID_HANDLE_VALUE)
-        {
-            DWORD bytesWritten;
-            WriteFile(hFile, pszData, dataSize, &bytesWritten, NULL);
-            CloseHandle(hFile);
-        }
-
         HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
         HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
         
@@ -2514,6 +2505,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
 
         free(pszData); // Free the original buffer
+        pData->buffer = NULL; // Prevent double-free
         free(pData);   // Free the container struct
 
         // Restore selection
