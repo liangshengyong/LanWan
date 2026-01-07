@@ -59,9 +59,6 @@
 #define RASEO2_RequireMachineCertificates 0x00000004
 #endif
 
-// The L2TP PSK is set via RasSetCredentials with the RASCM_PreSharedKey mask.
-// The unofficial RasSetKey/RAS_L2TP_KEY definitions are no longer needed.
-
 #ifndef RASNP_Ipv6
 #define RASNP_Ipv6 0x00000008
 #endif
@@ -155,6 +152,7 @@ typedef struct {
 #define WM_APP_UPDATE_FONT (WM_APP + 8)
 #define WM_APP_UPDATE_CHECK_SUCCESS (WM_APP + 9)
 #define WM_APP_UPDATE_CHECK_FAILURE (WM_APP + 10)
+#define WM_APP_UPDATE_UI_BUTTON_STATES (WM_APP + 11)
 
 // Window procedure function
 INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -733,6 +731,12 @@ BOOL g_wasMaximized = FALSE; // Store if the window was maximized
 // Global flag for traverse status
 BOOL g_traverseInProgress = FALSE;
 
+// Global flag for single dial-up connection status
+BOOL g_dialInProgress = FALSE;
+
+// Global flag to indicate that a refresh is in progress
+BOOL g_isRefreshing = FALSE;
+
 // Global flag to indicate if the "confirm disconnect" dialog is active
 BOOL g_isConfirmDisconnectDialogActive = FALSE;
 
@@ -904,7 +908,7 @@ DWORD WINAPI SingleDownloadThreadProc(LPVOID lpParameter)
             DWORD dwSize = 0;
             DWORD dwDownloaded = 0;
             do {
-                if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) { bResults = FALSE; break; }
+                if (InterlockedAdd(pData->pSuccessFlag, 0) == 1) { free(tempBuffer); bResults = FALSE; break; }
                 
                 if (!WinHttpQueryDataAvailable(hRequest, &dwSize)) { bResults = FALSE; break; }
 
@@ -1002,9 +1006,9 @@ void ShowTrayContextMenu(HWND hwnd)
         itemCount = SendMessageW(hListBox, LB_GETCOUNT, 0, 0);
     }
 
-    // Determine the state for "顺序连接" based on traverse status and item count
+    // Determine the state for "顺序连接" based on traverse status, dial status and item count
     UINT connectFlags = MF_BYPOSITION | MF_STRING;
-    if (g_traverseInProgress || itemCount <= 0) {
+    if (g_traverseInProgress || g_dialInProgress || itemCount <= 0 || g_isRefreshing) {
         connectFlags |= MF_GRAYED;
     }
     InsertMenuW(hPopupMenu, 2, connectFlags, ID_TRAY_CONNECT, L"顺序连接");
@@ -1438,8 +1442,13 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
     }
 
     // If we've reached a final state (connected or disconnected), or an error occurred, kill the timeout timer.
+    // Also, if a dial is in progress, reset the flag and update the UI.
     if (rascs == RASCS_Connected || rascs == RASCS_Disconnected || dwError != 0) {
         KillTimer(hMainWindow, IDT_CONNECT_TIMEOUT);
+        if (g_dialInProgress) {
+            g_dialInProgress = FALSE;
+            PostMessageW(hMainWindow, WM_APP_UPDATE_UI_BUTTON_STATES, 0, 0);
+        }
     }
 
     if (dwError)
@@ -1448,13 +1457,13 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
         wchar_t statusMsg[300];
         if (RasGetErrorStringW(dwError, errorMsg, 256) == 0)
         {
-            swprintf_s(statusMsg, 300, L"拨号失败: %s (%lu)", errorMsg, dwError);
+            swprintf_s(statusMsg, 300, L"连接失败: %s (%lu)", errorMsg, dwError);
         }
         else
         {
-            swprintf_s(statusMsg, 100, L"拨号失败: 未知错误 %lu", dwError);
+            swprintf_s(statusMsg, 100, L"连接失败: 未知错误 %lu", dwError);
         }
-        SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)statusMsg);
+        SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)statusMsg);
         UpdateTrayIcon(FALSE);
         // If traverse is in progress, signal failure
         if (g_traverseInProgress && g_hTraverseConnectEvent) {
@@ -1469,21 +1478,22 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
 
     switch (rascs)
     {
-        case RASCS_OpenPort: SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"正在打开端口..."); break;
-        case RASCS_PortOpened: SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"端口已打开"); break;
+        case RASCS_OpenPort: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"正在打开端口..."); break;
+        case RASCS_PortOpened: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"端口已打开"); break;
         case RASCS_ConnectDevice: 
-            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"正在连接服务器...");
+            SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"正在连接服务器...");
             SetTimer(hMainWindow, IDT_CONNECTDEVICE_TIMEOUT, 3000, NULL);
             break;
-        case RASCS_DeviceConnected: SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"服务器已连接"); break;
-        case RASCS_AllDevicesConnected: SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"所有服务器已连接"); break;
-        case RASCS_Authenticate: SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"正在验证身份..."); break;
-        case RASCS_AuthNotify: SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"等待验证通知..."); break;
-        case RASCS_Authenticated: SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"身份验证成功"); break;
+        case RASCS_DeviceConnected: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"服务器已连接"); break;
+        case RASCS_AllDevicesConnected: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"所有服务器已连接"); break;
+        case RASCS_Authenticate: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"正在验证身份..."); break;
+        case RASCS_AuthNotify: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"等待验证通知..."); break;
+        case RASCS_Authenticated: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"身份验证成功"); break;
+        case RASCS_AuthProject: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"正在配置网络参数..."); break;
         case RASCS_Connected: { // Use a block for local variable
             wchar_t statusText[256];
             swprintf_s(statusText, sizeof(statusText)/sizeof(wchar_t), L"已连接到 %s", g_currentConnectingServerIp);
-            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)statusText);
+            SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)statusText);
             UpdateTrayIcon(TRUE);
 
             // Store the successfully connected IP
@@ -1497,10 +1507,14 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
             }
             g_hRasConn = NULL; // Clear global handle on success
             g_currentConnectingServerIp[0] = L'\0'; // Clear global IP
+            if (g_dialInProgress) { // If it was a single dial, reset flag and update UI
+                g_dialInProgress = FALSE;
+                PostMessageW(hMainWindow, WM_APP_UPDATE_UI_BUTTON_STATES, 0, 0);
+            }
             break;
         }
         case RASCS_Disconnected: 
-            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"连接已断开");
+            SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"连接已断开");
             UpdateTrayIcon(FALSE);
             g_connectedIp[0] = L'\0'; // Clear connected IP on disconnect
             // If traverse is in progress and waiting, signal failure if not yet succeeded
@@ -1509,11 +1523,15 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
             }
             g_hRasConn = NULL; // Clear global handle on disconnect
             g_currentConnectingServerIp[0] = L'\0'; // Clear global IP
+            if (g_dialInProgress) { // If it was a single dial, reset flag and update UI
+                g_dialInProgress = FALSE;
+                PostMessageW(hMainWindow, WM_APP_UPDATE_UI_BUTTON_STATES, 0, 0);
+            }
             break;
         default: {
             wchar_t statusMsg[100];
             swprintf_s(statusMsg, 100, L"状态: %d", rascs);
-            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)statusMsg);
+            SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)statusMsg);
             break;
         }
     }
@@ -1531,6 +1549,11 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     wcscpy_s(serverIp, 256, pData->serverIp);
     free(pData);
 
+    // Set global flag and update UI
+    g_dialInProgress = TRUE;
+    // Post a message to the main thread to update UI, as direct UI manipulation from a worker thread is unsafe.
+    PostMessageW(hwnd, WM_APP_UPDATE_UI_BUTTON_STATES, 0, 0);
+
     wchar_t* statusMsg;
     DWORD rasResult;
 
@@ -1538,44 +1561,25 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     RASCONNW conn[10];
     DWORD connSize = sizeof(conn);
     DWORD numConn = 0;
+    // Per documentation, only the dwSize of the first element needs to be set.
     conn[0].dwSize = sizeof(RASCONNW);
 
     if (RasEnumConnectionsW(conn, &connSize, &numConn) == SUCCESS && numConn > 0) {
         for (DWORD i = 0; i < numConn; i++) {
             if (wcscmp(conn[i].szEntryName, L"蓝湾") == 0) {
-                statusMsg = _wcsdup(L"检测到现有连接，正在断开...");
+                statusMsg = _wcsdup(L"正在断开当前连接...");
                 if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
 
-                HANDLE hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-                if (hEvent == NULL) { // Event creation failed, just try to hang up without waiting.
-                    RasHangUpW(conn[i].hrasconn);
-                    break; // Exit loop
-                }
-
-                // Step 1: Register for the disconnection event (must be before HangUp)
-                DWORD ret = RasConnectionNotificationW(conn[i].hrasconn, hEvent, RASCN_Disconnection);
-
-                if (ret != ERROR_SUCCESS) { // Registration failed, hang up without waiting.
-                    RasHangUpW(conn[i].hrasconn);
-                    CloseHandle(hEvent);
-                    break; // Exit loop
-                }
-
-                // Step 2: Start the disconnection
                 RasHangUpW(conn[i].hrasconn);
-
-                // Step 3: Wait for the event
-                DWORD waitResult = WaitForSingleObject(hEvent, 10000); // 10-second timeout
-                CloseHandle(hEvent);
-
-                if (waitResult != WAIT_OBJECT_0) {
-                    statusMsg = _wcsdup(L"断开旧连接超时或失败。");
-                    if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
-                } else {
-                    statusMsg = _wcsdup(L"旧连接已断开。");
-                    if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
+                while (TRUE)
+                {
+                    RASCONNSTATUSW st = {sizeof(st)};
+                    if (RasGetConnectStatusW(conn[i].hrasconn, &st) != ERROR_SUCCESS)
+                        break;
+                    Sleep(100);
                 }
-                
+                Sleep(1000);
+
                 break; // Found and handled, exit loop
             }
         }
@@ -1589,11 +1593,11 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     entry.dwSize = sizeof(RASENTRYW);
     DWORD dwEntrySize = sizeof(entry);
     
-    // Get the existing properties for "蓝湾网络"
+    // Get the existing properties for "蓝湾"
     rasResult = RasGetEntryPropertiesW(g_phonebookPath, L"蓝湾", &entry, &dwEntrySize, NULL, NULL);
     if (rasResult != SUCCESS)
     {
-        statusMsg = _wcsdup(L"错误：找不到 '蓝湾网络' 条目，无法连接。");
+        statusMsg = _wcsdup(L"错误：找不到'蓝湾'，无法连接。");
         if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
         return 1;
     }
@@ -1611,26 +1615,10 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
     }
 
     // --- Dial the connection ---
-    statusMsg = _wcsdup(L"正在拨号...");
+    statusMsg = _wcsdup(L"正在连接...");
     if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
 
-    // Safety check: ensure no active connection exists before dialing.
-    RASCONNW conn_check[1];
-    DWORD conn_check_size = sizeof(conn_check);
-    DWORD conn_count = 0;
-    conn_check[0].dwSize = sizeof(RASCONNW);
-    if (RasEnumConnectionsW(conn_check, &conn_check_size, &conn_count) == SUCCESS && conn_count > 0)
-    {
-        for (DWORD i = 0; i < conn_count; i++) {
-            if (wcscmp(conn_check[i].szEntryName, L"蓝湾") == 0) {
-                // A connection still exists, so we should not dial.
-                statusMsg = _wcsdup(L"拨号失败：一个同名连接已处于活动状态。");
-                if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
-                return 1; // Abort.
-            }
-        }
-    }
-    
+
     RASDIALPARAMSW rasDialParams = {0};
     rasDialParams.dwSize = sizeof(RASDIALPARAMSW);
     wcscpy_s(rasDialParams.szEntryName, RAS_MaxEntryName + 1, L"蓝湾");
@@ -1645,40 +1633,24 @@ DWORD WINAPI ConnectVpnThreadProc(LPVOID lpParameter)
 
     if (rasResult == 0 || rasResult == ERROR_IO_PENDING)
     {
-        SetTimer(hwnd, IDT_CONNECT_TIMEOUT, 10000, NULL);
+        //设置总超时为8秒
+        SetTimer(hwnd, IDT_CONNECT_TIMEOUT, 8000, NULL);
     }
     else
     {
-        // If dialing fails because the connection is already being dialed (stuck),
-        // try to force a disconnect and inform the user to retry.
-        if (rasResult == ERROR_ALREADY_DIALING) // 801
+        wchar_t errorStr[256];
+        wchar_t finalErrorMsg[512];
+        if (RasGetErrorStringW(rasResult, errorStr, 256) == 0)
         {
-            wchar_t cmd[256];
-            swprintf_s(cmd, ARRAYSIZE(cmd), L"rasdial \"%s\" /disconnect", L"蓝湾");
-
-            wchar_t* hangupMsg = _wcsdup(L"连接似乎已拨或卡住，正在尝试强制断开...");
-            if(hangupMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)hangupMsg);
-
-            RunCommand(cmd); // Synchronously run the disconnect command
-
-            wchar_t* retryMsg = _wcsdup(L"已发送断开指令，请稍后重试。");
-            if(retryMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)retryMsg);
+            swprintf_s(finalErrorMsg, 512, L"连接失败: %s (%lu)", errorStr, rasResult);
         }
-        else
-        {
-            wchar_t errorStr[256];
-            wchar_t finalErrorMsg[512];
-            if (RasGetErrorStringW(rasResult, errorStr, 256) == 0)
-            {
-                swprintf_s(finalErrorMsg, 512, L"拨号启动失败: %s (%lu)", errorStr, rasResult);
-            }
-            else
-            {
-                swprintf_s(finalErrorMsg, 512, L"拨号启动失败: 未知错误 %lu", rasResult);
-            }
-            statusMsg = _wcsdup(finalErrorMsg);
-            if(statusMsg) PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
-        }
+        // else
+        // {
+        //     swprintf_s(finalErrorMsg, 512, L"连接失败: 未知错误 %lu", rasResult);
+        // }
+        statusMsg = _wcsdup(finalErrorMsg);
+        if (statusMsg)
+            PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
 
         g_hRasConn = NULL;
         return 1;
@@ -1696,20 +1668,25 @@ void UpdateUiButtonStates(HWND hwnd)
 
     if (!hListBox || !hTraverseButton || !hRefreshButton) return;
 
+    // Disable if any connection is in progress (traverse or single dial)
+    BOOL anyConnectionInProgress = g_traverseInProgress || g_dialInProgress;
+
+    // ListBox: Disable if any connection is in progress
+    EnableWindow(hListBox, !anyConnectionInProgress);
+
     LRESULT itemCount = SendMessageW(hListBox, LB_GETCOUNT, 0, 0);
 
     // Logic for IDC_BUTTON_CONNECT (Traverse button)
-    // Disabled if traverse is in progress OR list is empty.
-    if (g_traverseInProgress || itemCount <= 0) {
+    // Disabled if any connection is in progress OR list is empty.
+    if (anyConnectionInProgress || itemCount <= 0 || g_isRefreshing) {
         EnableWindow(hTraverseButton, FALSE);
     } else {
         EnableWindow(hTraverseButton, TRUE);
     }
 
     // Logic for IDC_BUTTON_REFRESH (Refresh button)
-    // Disabled if traverse is in progress.
-    // Otherwise, it should be enabled by default. Its own download process will temporarily disable it.
-    if (g_traverseInProgress) {
+    // Disabled if any connection is in progress.
+    if (anyConnectionInProgress || g_isRefreshing) {
         EnableWindow(hRefreshButton, FALSE);
     } else {
         EnableWindow(hRefreshButton, TRUE);
@@ -1732,7 +1709,7 @@ void ConnectVpn(HWND hwnd, const wchar_t* serverIp)
         else
         {
             free(pData);
-            SendMessageW(GetDlgItem(hwnd, IDC_STATUSBAR), SB_SETTEXTW, 1, (LPARAM)L"无法创建连接线程");
+            SendMessageW(GetDlgItem(hwnd, IDC_STATUSBAR), SB_SETTEXTW, 2, (LPARAM)L"无法创建连接线程");
         }
     }
 }
@@ -1827,7 +1804,7 @@ DWORD WINAPI TraverseConnectionThreadProc(LPVOID lpParameter)
             if (g_hRasConn != NULL) {
                 RasHangUpW(g_hRasConn);
                 // Wait for the hang up to complete. The callback will signal g_hTraverseConnectEvent on disconnection.
-                WaitForSingleObject(g_hTraverseConnectEvent, 5000); // 5-second timeout for hangup.
+                WaitForSingleObject(g_hTraverseConnectEvent, 3000); // 3-second timeout for hangup.
             }
         }
         // If waitResult is WAIT_OBJECT_0 and g_traverseConnectSuccess is FALSE, it means the connection failed quickly.
@@ -1849,7 +1826,7 @@ DWORD WINAPI TraverseConnectionThreadProc(LPVOID lpParameter)
         swprintf_s(successText, ARRAYSIZE(successText), L"已连接到 %s", g_lastSuccessfullyConnectedIp);
         finalMsg = _wcsdup(successText);
     } else {
-        finalMsg = _wcsdup(L"所有服务器均连接失败。");
+        finalMsg = _wcsdup(L"所有服务器均连接失败");
     }
     if (finalMsg) {
         PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)finalMsg);
@@ -2000,13 +1977,20 @@ static void UpdateStatusBarParts(HWND hwnd, UINT dpi)
         if (dpi == 0) dpi = 96;
     }
 
-    int textWidth = GetTextWidth(hStatusBar, hGuiFont, L"99 台服务器"); // Max expected text
     int paddingDIP = 6;
-    int totalPaddingPX = DpiScale(paddingDIP * 2, dpi);
-    int partWidth = textWidth + totalPaddingPX;
 
-    int parts[2] = { partWidth, -1 };
-    SendMessageW(hStatusBar, SB_SETPARTS, 2, (LPARAM)parts);
+    // Part 1: Server count. Based on "99 台服务器"
+    int textWidth1 = GetTextWidth(hStatusBar, hGuiFont, L"99 台服务器");
+    int totalPaddingPX1 = DpiScale(paddingDIP * 2, dpi);
+    int part1_width = textWidth1 + totalPaddingPX1;
+
+    // Part 2: Refresh status. Based on "正在刷新..."
+    int textWidth2 = GetTextWidth(hStatusBar, hGuiFont, L"正在刷新...");
+    int totalPaddingPX2 = DpiScale(paddingDIP * 2, dpi);
+    int part2_width = textWidth2 + totalPaddingPX2;
+
+    int parts[3] = { part1_width, part1_width + part2_width, -1 };
+    SendMessageW(hStatusBar, SB_SETPARTS, 3, (LPARAM)parts);
 }
 
 INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -2062,7 +2046,8 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             // Update status bar for the default entry
             SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)L"3 台服务器");
-            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"就绪");
+            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"");
+            SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"");
             
             UpdateUiButtonStates(hwnd);
             AddTrayIcon(hwnd);
@@ -2231,47 +2216,81 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         if (!EnsureVpnEntryExists(hwnd)) break;
 
                         HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
-                        int index = (int)SendMessageW(hListBox, LB_GETCURSEL, 0, 0);
-                        if (index != LB_ERR)
-                        {
-                            int len = (int)SendMessageW(hListBox, LB_GETTEXTLEN, index, 0);
-                            if (len > 0) // LB_ERR is -1, so this also handles errors. An empty string has len 0.
-                            {
-                                wchar_t* buffer = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
-                                if (buffer)
-                                {
-                                    SendMessageW(hListBox, LB_GETTEXT, index, (LPARAM)buffer);
-                                    
-                                    // Check if the string contains more than just whitespace
-                                    BOOL isBlank = TRUE;
-                                    for (int i = 0; i < len; i++)
-                                    {
-                                        if (!iswspace(buffer[i]))
-                                        {
-                                            isBlank = FALSE;
-                                            break;
-                                        }
-                                    }
+                        
+                        // Get the mouse position in screen coordinates and convert to client coordinates of the listbox.
+                        POINT pt;
+                        GetCursorPos(&pt);
+                        ScreenToClient(hListBox, &pt);
 
-                                    if (!isBlank)
+                        // Find which item is at that point.
+                        LRESULT item_index_result = SendMessageW(hListBox, LB_ITEMFROMPOINT, 0, MAKELPARAM(pt.x, pt.y));
+                        
+                        // HIWORD is non-zero if the point is outside the client rectangle.
+                        // We also check if LB_GETCOUNT is 0, in which case LB_ITEMFROMPOINT result is not reliable.
+                        int itemCount = (int)SendMessageW(hListBox, LB_GETCOUNT, 0, 0);
+                        if (HIWORD(item_index_result) != 0 || itemCount == 0)
+                        {
+                            // Clicked outside the listbox client area or listbox is empty.
+                            return (INT_PTR)TRUE;
+                        }
+
+                        int index = LOWORD(item_index_result);
+
+                        // Check if the point is actually within the item's rectangle.
+                        // LB_ITEMFROMPOINT returns the nearest item, even if the click is in whitespace below it.
+                        RECT item_rect;
+                        if (SendMessageW(hListBox, LB_GETITEMRECT, index, (LPARAM)&item_rect) == LB_ERR)
+                        {
+                            // Invalid index, should not happen but good to check.
+                            return (INT_PTR)TRUE;
+                        }
+
+                        if (!PtInRect(&item_rect, pt))
+                        {
+                            // Click was in whitespace, not on an item.
+                            return (INT_PTR)TRUE;
+                        }
+
+                        // At this point, we are sure the user double-clicked an actual item.
+                        // The rest of the original logic can proceed.
+                        int len = (int)SendMessageW(hListBox, LB_GETTEXTLEN, index, 0);
+                        if (len > 0)
+                        {
+                            wchar_t* buffer = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
+                            if (buffer)
+                            {
+                                SendMessageW(hListBox, LB_GETTEXT, index, (LPARAM)buffer);
+                                
+                                // Check if the string contains more than just whitespace
+                                BOOL isBlank = TRUE;
+                                for (int i = 0; i < len; i++)
+                                {
+                                    if (!iswspace(buffer[i]))
                                     {
-                                        // The logic for checking and hanging up existing connections
-                                        // is now inside ConnectVpnThreadProc.
-                                        ConnectVpn(hwnd, buffer);
+                                        isBlank = FALSE;
+                                        break;
                                     }
-                                    
-                                    free(buffer);
                                 }
+
+                                if (!isBlank)
+                                {
+                                    ConnectVpn(hwnd, buffer);
+                                }
+                                
+                                free(buffer);
                             }
                         }
                     }
                     break;
                 case IDC_BUTTON_REFRESH:
                 {
-                    HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
-                    EnableWindow(hButton, FALSE);
-                    HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
-                    EnableWindow(hTraverseButton, FALSE);
+                    if (g_isRefreshing)
+                    {
+                        break;
+                    }
+                    g_isRefreshing = TRUE;
+                    
+                    UpdateUiButtonStates(hwnd); // Disable buttons
                     SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"正在刷新...");
 
                     MASTER_DOWNLOAD_THREAD_DATA* pData = (MASTER_DOWNLOAD_THREAD_DATA*)malloc(sizeof(MASTER_DOWNLOAD_THREAD_DATA));
@@ -2286,13 +2305,13 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         else
                         {
                             free(pData);
-                            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"无法创建线程");
-                            EnableWindow(hButton, TRUE);
+                            g_isRefreshing = FALSE;
+                            SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"无法创建线程");
                             UpdateUiButtonStates(hwnd);
                         }
                     } else {
-                        SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"内存分配失败");
-                        EnableWindow(hButton, TRUE);
+                        g_isRefreshing = FALSE;
+                        SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"内存分配失败");
                         UpdateUiButtonStates(hwnd);
                     }
                     break;
@@ -2303,7 +2322,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     if (!EnsureVpnEntryExists(hwnd)) break;
 
                     if (g_traverseInProgress) {
-                        SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"正在顺序连接...");
+                        SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"正在顺序连接...");
                         break;
                     }
                     
@@ -2311,7 +2330,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         break; // User chose not to continue
                     }
 
-                    SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"开始顺序连接...");
+                    SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"开始顺序连接...");
 
                     g_traverseInProgress = TRUE;
                     UpdateUiButtonStates(hwnd);
@@ -2330,14 +2349,14 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                             free(pData);
                             g_traverseInProgress = FALSE; // Set flag first
                             UpdateUiButtonStates(hwnd); // Then update UI
-                            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"无法创建顺序连接线程");
+                            SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"无法创建顺序连接线程");
                         }
                     }
                     else // This is also a problematic else block
                     {
                         g_traverseInProgress = FALSE; // Set flag first
                         UpdateUiButtonStates(hwnd); // Then update UI
-                        SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"内存分配失败");
+                        SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"内存分配失败");
                     }
                     break;
                 }
@@ -2379,7 +2398,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         }
                         
                         // Update UI immediately after initiating hangup.
-                        SendMessageW(GetDlgItem(hwnd, IDC_STATUSBAR), SB_SETTEXTW, 1, (LPARAM)L"连接已断开");
+                        SendMessageW(GetDlgItem(hwnd, IDC_STATUSBAR), SB_SETTEXTW, 2, (LPARAM)L"连接已断开");
                         UpdateTrayIcon(FALSE);
                         g_connectedIp[0] = L'\0'; // Immediately clear the connected IP
                     }
@@ -2452,96 +2471,102 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_DOWNLOAD_SUCCESS:
     {
         DOWNLOADED_DATA* pData = (DOWNLOADED_DATA*)lParam;
-        char* pszData = pData->buffer;
-        DWORD dataSize = pData->size;
-
         HWND hListBox = GetDlgItem(hwnd, IDC_LISTBOX);
-        HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
-        
-        // Preserve selection
         wchar_t* selectedText = NULL;
+
+        // Guard against null data
+        if (!pData) {
+            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"刷新失败 (内部错误)");
+            g_isRefreshing = FALSE;
+            UpdateUiButtonStates(hwnd);
+            break;
+        }
+
+        // --- 1. Preserve selection safely ---
         int selectedIndex = (int)SendMessageW(hListBox, LB_GETCURSEL, 0, 0);
         if (selectedIndex != LB_ERR)
         {
             int textLen = (int)SendMessageW(hListBox, LB_GETTEXTLEN, selectedIndex, 0);
-            if (textLen > 0)
+            if (textLen > 0 && textLen != LB_ERR)
             {
                 selectedText = (wchar_t*)malloc((textLen + 1) * sizeof(wchar_t));
                 if (selectedText)
                 {
+                    // Ensure buffer is null-terminated in case of error
+                    selectedText[0] = L'\0';
                     SendMessageW(hListBox, LB_GETTEXT, selectedIndex, (LPARAM)selectedText);
                 }
             }
         }
 
-        // Convert multi-byte string (UTF-8 from web) to wide-char string
-        // Use the explicit data size instead of relying on null termination (-1)
-        int wideCharCount = MultiByteToWideChar(CP_UTF8, 0, pszData, dataSize, NULL, 0);
-        if (wideCharCount > 0)
-        {
-            // Allocate enough space for the wide-char string plus a null terminator
-            wchar_t* pwszData = (wchar_t*)malloc((wideCharCount + 1) * sizeof(wchar_t));
-            if (pwszData)
-            {
-                MultiByteToWideChar(CP_UTF8, 0, pszData, dataSize, pwszData, wideCharCount);
-                pwszData[wideCharCount] = L'\0'; // Manually add null terminator
+        // --- 2. Always clear the listbox before populating ---
+        SendMessageW(hListBox, LB_RESETCONTENT, 0, 0);
 
-                SendMessageW(hListBox, LB_RESETCONTENT, 0, 0);
-                
-                wchar_t* context = NULL;
-                wchar_t* line = wcstok_s(pwszData, L"\n", &context);
-                while (line != NULL)
+        // --- 3. Process downloaded data and populate listbox ---
+        if (pData->buffer && pData->size > 0)
+        {
+            int wideCharCount = MultiByteToWideChar(CP_UTF8, 0, pData->buffer, pData->size, NULL, 0);
+            if (wideCharCount > 0)
+            {
+                wchar_t* pwszData = (wchar_t*)malloc((wideCharCount + 1) * sizeof(wchar_t));
+                if (pwszData)
                 {
-                    // Trim trailing \r if present
-                    size_t len = wcslen(line);
-                    if (len > 0 && line[len-1] == L'\r') { 
-                        line[len-1] = L'\0';
+                    MultiByteToWideChar(CP_UTF8, 0, pData->buffer, pData->size, pwszData, wideCharCount);
+                    pwszData[wideCharCount] = L'\0'; // Null-terminate
+
+                    wchar_t* context = NULL;
+                    wchar_t* line = wcstok_s(pwszData, L"\n", &context);
+                    while (line != NULL)
+                    {
+                        size_t len = wcslen(line);
+                        if (len > 0 && line[len-1] == L'\r') { 
+                            line[len-1] = L'\0';
+                        }
+                        // Do not add empty lines
+                        if (wcslen(line) > 0) {
+                            SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)line);
+                        }
+                        line = wcstok_s(NULL, L"\n", &context);
                     }
-                    SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)line);
-                    line = wcstok_s(NULL, L"\n", &context);
+                    free(pwszData);
                 }
-                free(pwszData);
             }
         }
+        
+        // --- 4. Free downloaded data ---
+        free(pData->buffer);
+        free(pData);
 
-        free(pszData); // Free the original buffer
-        pData->buffer = NULL; // Prevent double-free
-        free(pData);   // Free the container struct
-
-        // Restore selection
+        // --- 5. Restore selection safely ---
         if (selectedText)
         {
-            int newIndex = (int)SendMessageW(hListBox, LB_FINDSTRINGEXACT, -1, (LPARAM)selectedText);
-            if (newIndex != LB_ERR)
+            if (selectedText[0] != L'\0')
             {
-                SendMessageW(hListBox, LB_SETCURSEL, newIndex, 0);
+                int newIndex = (int)SendMessageW(hListBox, LB_FINDSTRINGEXACT, -1, (LPARAM)selectedText);
+                if (newIndex != LB_ERR)
+                {
+                    SendMessageW(hListBox, LB_SETCURSEL, newIndex, 0);
+                }
             }
             free(selectedText);
         }
 
-        // Get the number of items in the list box
+        // --- 6. ALWAYS update status and UI state ---
         LRESULT serverCount = SendMessageW(hListBox, LB_GETCOUNT, 0, 0);
-
-        // Format the server count for the first part of the status bar
         wchar_t serverCountText[50];
         swprintf_s(serverCountText, sizeof(serverCountText)/sizeof(wchar_t), L"%lld 台服务器", serverCount);
         SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)serverCountText);
-
-        // Update the second part with the success message
-        SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"已刷新");
+        SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"刷新成功");
         
-        EnableWindow(hButton, TRUE);
-        
+        g_isRefreshing = FALSE;
         UpdateUiButtonStates(hwnd);
         break;
     }
 
     case WM_DOWNLOAD_FAILURE:
     {
-        HWND hButton = GetDlgItem(hwnd, IDC_BUTTON_REFRESH);
-        HWND hTraverseButton = GetDlgItem(hwnd, IDC_BUTTON_CONNECT);
         SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"刷新失败");
-        EnableWindow(hButton, TRUE);
+        g_isRefreshing = FALSE;
         // 如果列表框中仍有数据，则允许用户点击“顺序连接”
         UpdateUiButtonStates(hwnd);
         break;
@@ -2552,7 +2577,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         wchar_t* statusMsg = (wchar_t*)lParam;
         if (statusMsg)
         {
-            SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)statusMsg);
+            SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)statusMsg);
             free(statusMsg);
         }
         break;
@@ -2561,6 +2586,12 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     case WM_TRAVERSE_COMPLETE:
         {
             g_traverseInProgress = FALSE;
+            UpdateUiButtonStates(hwnd);
+            break;
+        }
+
+    case WM_APP_UPDATE_UI_BUTTON_STATES:
+        {
             UpdateUiButtonStates(hwnd);
             break;
         }
@@ -2576,7 +2607,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             // If the connection is still trying to connect, hang it up
             if (g_hRasConn != NULL)
             {
-                SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"连接超时");
+                SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"连接超时");
                 RasHangUpW(g_hRasConn);
                 g_hRasConn = NULL; // Clear the handle
             }
@@ -2586,7 +2617,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             KillTimer(hwnd, IDT_CONNECTDEVICE_TIMEOUT);
             if (g_hRasConn != NULL)
             {
-                SendMessageW(hStatusBar, SB_SETTEXTW, 1, (LPARAM)L"连接服务器超时");
+                SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"连接服务器超时");
                 RasHangUpW(g_hRasConn);
                 g_hRasConn = NULL;
             }

@@ -52,7 +52,7 @@ BEGIN
         BEGIN
             VALUE "FileDescription", "蓝湾是一个 L2TP/IPsec 服务器测试程序"
             VALUE "ProductName", "蓝湾"
-            VALUE "ProductVersion", "2026.1.1"
+            VALUE "ProductVersion", "2026.1.7"
 			VALUE "LegalCopyright", "© 2026 梁升勇"
         END
     END
