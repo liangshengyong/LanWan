@@ -1,4 +1,4 @@
-#define MAINICON_ID 101
+﻿#define MAINICON_ID 101
 #define TRAYICON_ID 102
 
 #define IDR_MENU 103

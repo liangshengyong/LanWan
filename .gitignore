@@ -368,3 +368,5 @@ FodyWeavers.xsd
 *.res
 新建文本文档.txt
 LanWan.zip
+.vscode/tasks.json
+.vscode/launch.json

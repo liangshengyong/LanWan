@@ -1,4 +1,4 @@
-#define _WIN32_WINNT 0x0A00
+﻿#define _WIN32_WINNT 0x0A00
 
 // Winsock needs to be included before windows.h
 #include <winsock2.h>
@@ -1485,7 +1485,6 @@ VOID WINAPI RasDialCallback(UINT unMsg, RASCONNSTATE rascs, DWORD dwError, HRASC
             SetTimer(hMainWindow, IDT_CONNECTDEVICE_TIMEOUT, 3000, NULL);
             break;
         case RASCS_DeviceConnected: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"服务器已连接"); break;
-        case RASCS_AllDevicesConnected: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"所有服务器已连接"); break;
         case RASCS_Authenticate: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"正在验证身份..."); break;
         case RASCS_AuthNotify: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"等待验证通知..."); break;
         case RASCS_Authenticated: SendMessageW(hStatusBar, SB_SETTEXTW, 2, (LPARAM)L"身份验证成功"); break;
