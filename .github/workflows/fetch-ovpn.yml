@@ -1,0 +1,76 @@
+name: Fetch VPNGate OpenVPN Base64 (10min)
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 1️⃣ 下载 VPNGate CSV
+      - name: Download VPNGate API
+        run: |
+          curl -sL https://www.vpngate.net/api/iphone/ -o /tmp/vpngate.csv
+
+      # 2️⃣ 提取 OpenVPN_ConfigData_Base64 → JSON 数组
+      - name: Extract OpenVPN base64 to JSON
+        run: |
+          mkdir -p data
+
+          # 找到 OpenVPN_ConfigData_Base64 在第几列
+          COL=$(awk -F',' '
+            NR==2 {
+              for (i=1;i<=NF;i++) {
+                if ($i=="OpenVPN_ConfigData_Base64") {
+                  print i
+                  exit
+                }
+              }
+            }
+          ' /tmp/vpngate.csv)
+
+          # 提取字段并生成 JSON
+          awk -F',' -v col="$COL" '
+            NR>2 && $col != "" {
+              gsub(/\r/, "", $col)
+              print "\"" $col "\""
+            }
+          ' /tmp/vpngate.csv \
+          | sort -u \
+          | sed '1s/^/[/' \
+          | sed '$s/$/]/' \
+          | sed '$!s/$/,/' \
+          > /tmp/servers_new.json
+
+      # 3️⃣ 对比旧文件 hash
+      - name: Compare with existing servers.json
+        id: diff
+        run: |
+          if [ -f data/servers.json ]; then
+            old_hash=$(sha256sum data/servers.json | cut -d' ' -f1)
+            new_hash=$(sha256sum /tmp/servers_new.json | cut -d' ' -f1)
+
+            if [ "$old_hash" = "$new_hash" ]; then
+              echo "changed=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+
+          echo "changed=true" >> $GITHUB_OUTPUT
+          mv /tmp/servers_new.json data/servers.json
+
+      # 4️⃣ 只有变化才提交
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add data/servers.json
+          git commit -m "Update VPNGate OpenVPN servers"
+          git push
