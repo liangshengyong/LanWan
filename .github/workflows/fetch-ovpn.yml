@@ -23,11 +23,12 @@ jobs:
         run: |
           mkdir -p data
 
-          # 找到 OpenVPN_ConfigData_Base64 所在列号
+          # === 自动定位 OpenVPN_ConfigData_Base64 列（不依赖行号） ===
           COL=$(awk -F',' '
-            $0 !~ /^\*/ && NR==2 {
-              for (i=1;i<=NF;i++) {
-                if ($i=="OpenVPN_ConfigData_Base64") {
+            $0 ~ /^\*/ { next }        # 跳过注释行
+            {
+              for (i = 1; i <= NF; i++) {
+                if ($i == "OpenVPN_ConfigData_Base64") {
                   print i
                   exit
                 }
@@ -40,15 +41,11 @@ jobs:
             exit 1
           fi
 
-          # 提取字段并生成 JSON 数组
+          # === 提取 Base64，生成 JSON 数组 ===
           awk -F',' -v col="$COL" '
-            # 跳过注释行
-            $0 ~ /^\*/ { next }
+            $0 ~ /^\*/ { next }        # 跳过注释行
 
-            # 跳过表头行
-            $col == "OpenVPN_ConfigData_Base64" { next }
-
-            # 有效 Base64 数据
+            # 只接受合法 Base64（自动排除表头/垃圾行）
             $col ~ /^[A-Za-z0-9+/=]+$/ {
               gsub(/\r/, "", $col)
               print "\"" $col "\""
@@ -74,4 +71,15 @@ jobs:
             fi
           fi
 
-          echo "changed
+          echo "changed=true" >> $GITHUB_OUTPUT
+          mv /tmp/servers_new.json data/servers.json
+
+      # 4️⃣ 只有内容变化才提交
+      - name: Commit and push
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add data/servers.json
+          git commit -m "Update VPNGate OpenVPN servers"
+          git push
