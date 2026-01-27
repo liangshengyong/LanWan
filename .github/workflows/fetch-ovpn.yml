@@ -28,9 +28,8 @@ jobs:
           import json
           import sys
 
-          # 读取并过滤掉注释行（以 * 开头）
           with open("vpngate.txt", "r", encoding="utf-8", errors="ignore") as f:
-              lines = [l for l in f if not l.startswith("*")]
+              lines = [l.strip() for l in f if l.strip() and not l.startswith("*")]
 
           if not lines:
               print("No CSV data found")
@@ -40,21 +39,18 @@ jobs:
 
           if "OpenVPN_ConfigData_Base64" not in reader.fieldnames:
               print("Columns found:", reader.fieldnames)
-              print("OpenVPN_ConfigData_Base64 column not found")
               sys.exit(1)
 
-          result = []
-          for row in reader:
-              val = row.get("OpenVPN_ConfigData_Base64", "").strip()
-              if val:
-                  result.append(val)
-
-          result = sorted(set(result))
+          data = sorted({
+              row["OpenVPN_ConfigData_Base64"].strip()
+              for row in reader
+              if row.get("OpenVPN_ConfigData_Base64")
+          })
 
           with open("data/servers.json", "w", encoding="utf-8") as f:
-              json.dump(result, f, ensure_ascii=False, indent=2)
+              json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
 
-          print(f"Saved {len(result)} OpenVPN configs")
+          print(f"Saved {len(data)} OpenVPN configs")
           EOF
 
       - name: Commit if changed
