@@ -1,85 +1,70 @@
-name: Fetch VPNGate OpenVPN Base64 (10min)
+name: Fetch VPNGate OpenVPN Base64
 
 on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 1️⃣ 下载 VPNGate CSV
-      - name: Download VPNGate API
+      - name: Prepare data directory
+        run: mkdir -p data
+
+      - name: Fetch and extract OpenVPN base64
         run: |
-          curl -sL https://www.vpngate.net/api/iphone/ -o /tmp/vpngate.csv
+          curl -fsSL https://www.vpngate.net/api/iphone/ -o vpngate.txt
 
-      # 2️⃣ 提取 OpenVPN_ConfigData_Base64 → JSON
-      - name: Extract OpenVPN base64 to JSON
+          python3 << 'EOF'
+          import csv
+          import json
+          import sys
+
+          # 读取并过滤掉注释行（以 * 开头）
+          with open("vpngate.txt", "r", encoding="utf-8", errors="ignore") as f:
+              lines = [l for l in f if not l.startswith("*")]
+
+          if not lines:
+              print("No CSV data found")
+              sys.exit(1)
+
+          reader = csv.DictReader(lines)
+
+          if "OpenVPN_ConfigData_Base64" not in reader.fieldnames:
+              print("Columns found:", reader.fieldnames)
+              print("OpenVPN_ConfigData_Base64 column not found")
+              sys.exit(1)
+
+          result = []
+          for row in reader:
+              val = row.get("OpenVPN_ConfigData_Base64", "").strip()
+              if val:
+                  result.append(val)
+
+          result = sorted(set(result))
+
+          with open("data/servers.json", "w", encoding="utf-8") as f:
+              json.dump(result, f, ensure_ascii=False, indent=2)
+
+          print(f"Saved {len(result)} OpenVPN configs")
+          EOF
+
+      - name: Commit if changed
         run: |
-          mkdir -p data
-
-          # === 自动定位 OpenVPN_ConfigData_Base64 列（不依赖行号） ===
-          COL=$(awk -F',' '
-            $0 ~ /^\*/ { next }        # 跳过注释行
-            {
-              for (i = 1; i <= NF; i++) {
-                if ($i == "OpenVPN_ConfigData_Base64") {
-                  print i
-                  exit
-                }
-              }
-            }
-          ' /tmp/vpngate.csv)
-
-          if [ -z "$COL" ]; then
-            echo "OpenVPN_ConfigData_Base64 column not found"
-            exit 1
+          if git diff --quiet; then
+            echo "No changes"
+          else
+            git config user.name "github-actions"
+            git config user.email "github-actions@github.com"
+            git add data/servers.json
+            git commit -m "Update VPNGate OpenVPN configs"
+            git push
           fi
-
-          # === 提取 Base64，生成 JSON 数组 ===
-          awk -F',' -v col="$COL" '
-            $0 ~ /^\*/ { next }        # 跳过注释行
-
-            # 只接受合法 Base64（自动排除表头/垃圾行）
-            $col ~ /^[A-Za-z0-9+/=]+$/ {
-              gsub(/\r/, "", $col)
-              print "\"" $col "\""
-            }
-          ' /tmp/vpngate.csv \
-          | sort -u \
-          | sed '1s/^/[/' \
-          | sed '$s/$/]/' \
-          | sed '$!s/$/,/' \
-          > /tmp/servers_new.json
-
-      # 3️⃣ 对比是否有变化
-      - name: Compare with existing servers.json
-        id: diff
-        run: |
-          if [ -f data/servers.json ]; then
-            old_hash=$(sha256sum data/servers.json | cut -d' ' -f1)
-            new_hash=$(sha256sum /tmp/servers_new.json | cut -d' ' -f1)
-
-            if [ "$old_hash" = "$new_hash" ]; then
-              echo "changed=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          fi
-
-          echo "changed=true" >> $GITHUB_OUTPUT
-          mv /tmp/servers_new.json data/servers.json
-
-      # 4️⃣ 只有内容变化才提交
-      - name: Commit and push
-        if: steps.diff.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add data/servers.json
-          git commit -m "Update VPNGate OpenVPN servers"
-          git push
