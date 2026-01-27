@@ -18,14 +18,14 @@ jobs:
         run: |
           curl -sL https://www.vpngate.net/api/iphone/ -o /tmp/vpngate.csv
 
-      # 2️⃣ 提取 OpenVPN_ConfigData_Base64 → JSON 数组
+      # 2️⃣ 提取 OpenVPN_ConfigData_Base64 → JSON
       - name: Extract OpenVPN base64 to JSON
         run: |
           mkdir -p data
 
-          # 找到 OpenVPN_ConfigData_Base64 在第几列
+          # 找到 OpenVPN_ConfigData_Base64 所在列号
           COL=$(awk -F',' '
-            NR==2 {
+            $0 !~ /^\*/ && NR==2 {
               for (i=1;i<=NF;i++) {
                 if ($i=="OpenVPN_ConfigData_Base64") {
                   print i
@@ -35,9 +35,21 @@ jobs:
             }
           ' /tmp/vpngate.csv)
 
-          # 提取字段并生成 JSON
+          if [ -z "$COL" ]; then
+            echo "OpenVPN_ConfigData_Base64 column not found"
+            exit 1
+          fi
+
+          # 提取字段并生成 JSON 数组
           awk -F',' -v col="$COL" '
-            NR>2 && $col != "" {
+            # 跳过注释行
+            $0 ~ /^\*/ { next }
+
+            # 跳过表头行
+            $col == "OpenVPN_ConfigData_Base64" { next }
+
+            # 有效 Base64 数据
+            $col ~ /^[A-Za-z0-9+/=]+$/ {
               gsub(/\r/, "", $col)
               print "\"" $col "\""
             }
@@ -48,7 +60,7 @@ jobs:
           | sed '$!s/$/,/' \
           > /tmp/servers_new.json
 
-      # 3️⃣ 对比旧文件 hash
+      # 3️⃣ 对比是否有变化
       - name: Compare with existing servers.json
         id: diff
         run: |
@@ -62,15 +74,4 @@ jobs:
             fi
           fi
 
-          echo "changed=true" >> $GITHUB_OUTPUT
-          mv /tmp/servers_new.json data/servers.json
-
-      # 4️⃣ 只有变化才提交
-      - name: Commit and push
-        if: steps.diff.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add data/servers.json
-          git commit -m "Update VPNGate OpenVPN servers"
-          git push
+          echo "changed
