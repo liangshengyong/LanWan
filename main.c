@@ -319,7 +319,7 @@ DWORD WINAPI CheckForUpdateThreadProc(LPVOID lpParameter) {
                         do {
                             dwSize = 0;
                             if (WinHttpQueryDataAvailable(hRequest, &dwSize)) {
-                                if (dwSize > 0) {
+                                if (dwSize > 0 && dwSize <= (1024 * 1024) && (totalSize + dwSize) > totalSize) {
                                     char* new_buffer = (char*)realloc(buffer, totalSize + dwSize);
                                     if (new_buffer) {
                                         buffer = new_buffer;
@@ -341,7 +341,7 @@ DWORD WINAPI CheckForUpdateThreadProc(LPVOID lpParameter) {
                                 if (tag_name_end) {
                                     size_t tag_name_len = tag_name_end - tag_name_start;
                                     int w_tag_name_len = MultiByteToWideChar(CP_UTF8, 0, tag_name_start, tag_name_len, NULL, 0);
-                                    pTagName = (wchar_t*)malloc((w_tag_name_len + 1) * sizeof(wchar_t));
+                                    pTagName = (wchar_t*)calloc((size_t)w_tag_name_len + 1, sizeof(wchar_t));
                                     if (pTagName) {
                                         MultiByteToWideChar(CP_UTF8, 0, tag_name_start, tag_name_len, pTagName, w_tag_name_len);
                                         pTagName[w_tag_name_len] = L'\0';
@@ -1757,7 +1757,7 @@ DWORD WINAPI TraverseConnectionThreadProc(LPVOID lpParameter)
             continue;
         }
 
-        wchar_t* buffer = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
+        wchar_t* buffer = (wchar_t*)calloc((size_t)len + 1, sizeof(wchar_t));
         if (!buffer) {
             continue;
         }
@@ -1779,7 +1779,7 @@ DWORD WINAPI TraverseConnectionThreadProc(LPVOID lpParameter)
         }
 
         // Update status showing which server is being tested
-        wchar_t* statusMsg = (wchar_t*)malloc(512 * sizeof(wchar_t));
+        wchar_t* statusMsg = (wchar_t*)calloc(512, sizeof(wchar_t));
         if (statusMsg) {
             swprintf_s(statusMsg, 512, L"正在测试 [%d/%d] %s", i + 1, itemCount, buffer);
             PostMessageW(hwnd, WM_VPN_STATUS_UPDATE, 0, (LPARAM)statusMsg);
@@ -2147,7 +2147,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                     int len = (int)SendMessageW(hListBox, LB_GETTEXTLEN, item_index, 0);
                     if (len > 0)
                     {
-                        wchar_t* buffer = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
+                        wchar_t* buffer = (wchar_t*)calloc((size_t)len + 1, sizeof(wchar_t));
                         if (buffer)
                         {
                             SendMessageW(hListBox, LB_GETTEXT, item_index, (LPARAM)buffer);
@@ -2255,7 +2255,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         int len = (int)SendMessageW(hListBox, LB_GETTEXTLEN, index, 0);
                         if (len > 0)
                         {
-                            wchar_t* buffer = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
+                            wchar_t* buffer = (wchar_t*)calloc((size_t)len + 1, sizeof(wchar_t));
                             if (buffer)
                             {
                                 SendMessageW(hListBox, LB_GETTEXT, index, (LPARAM)buffer);
@@ -2414,7 +2414,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                             int len = (int)SendMessageW(hListBox, LB_GETTEXTLEN, index, 0);
                             if (len > 0)
                             {
-                                wchar_t* buffer = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
+                                wchar_t* buffer = (wchar_t*)calloc((size_t)len + 1, sizeof(wchar_t));
                                 if (buffer)
                                 {
                                     SendMessageW(hListBox, LB_GETTEXT, index, (LPARAM)buffer);
@@ -2435,7 +2435,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                             int len = (int)SendMessageW(hListBox, LB_GETTEXTLEN, index, 0);
                             if (len > 0)
                             {
-                                wchar_t* buffer = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
+                                wchar_t* buffer = (wchar_t*)calloc((size_t)len + 1, sizeof(wchar_t));
                                 if (buffer)
                                 {
                                     SendMessageW(hListBox, LB_GETTEXT, index, (LPARAM)buffer);
@@ -2488,7 +2488,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             int textLen = (int)SendMessageW(hListBox, LB_GETTEXTLEN, selectedIndex, 0);
             if (textLen > 0 && textLen != LB_ERR)
             {
-                selectedText = (wchar_t*)malloc((textLen + 1) * sizeof(wchar_t));
+                selectedText = (wchar_t*)calloc((size_t)textLen + 1, sizeof(wchar_t));
                 if (selectedText)
                 {
                     // Ensure buffer is null-terminated in case of error
@@ -2507,7 +2507,7 @@ INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             int wideCharCount = MultiByteToWideChar(CP_UTF8, 0, pData->buffer, pData->size, NULL, 0);
             if (wideCharCount > 0)
             {
-                wchar_t* pwszData = (wchar_t*)malloc((wideCharCount + 1) * sizeof(wchar_t));
+                wchar_t* pwszData = (wchar_t*)calloc((size_t)wideCharCount + 1, sizeof(wchar_t));
                 if (pwszData)
                 {
                     MultiByteToWideChar(CP_UTF8, 0, pData->buffer, pData->size, pwszData, wideCharCount);
