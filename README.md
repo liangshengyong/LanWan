@@ -1,5 +1,9 @@
 # 蓝湾
 
+<!-- hy-mt2-i18n:start -->
+**中文** · [English](./README_en.md) · [日本語](./README_ja.md) · [Español](./README_es.md)
+<!-- hy-mt2-i18n:end -->
+
 蓝湾是一个 L2TP/IPsec 服务器测试程序
 
 ---
